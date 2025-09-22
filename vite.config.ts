@@ -37,13 +37,13 @@ export default defineConfig({
   ],
   resolve: {
     alias: {
-      "@components": path.resolve(__dirname, "src/components"),
-      "@contexts": path.resolve(__dirname, "src/contexts"),
-      "@hooks": path.resolve(__dirname, "src/hooks"),
-      "@services": path.resolve(__dirname, "src/services"),
-      "@models": path.resolve(__dirname, "src/types"), //
-      "@utils": path.resolve(__dirname, "src/utils"),
-      "@screens": path.resolve(__dirname, "src/screens"),
+    '@components': path.resolve(__dirname, 'src/components'),
+    '@contexts': path.resolve(__dirname, 'src/contexts'),
+    '@hooks': path.resolve(__dirname, 'src/hooks'),
+    '@services': path.resolve(__dirname, 'src/services'),
+    '@utils': path.resolve(__dirname, 'src/utils'),
+    '@screens': path.resolve(__dirname, 'src/screens'),
+    '@models': path.resolve(__dirname, 'src/types'), // se estiver usando
     },
   },
 });
