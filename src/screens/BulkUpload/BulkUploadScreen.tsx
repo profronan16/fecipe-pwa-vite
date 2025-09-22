@@ -1,0 +1,1 @@
+export default function BulkUploadScreen(){ return <div style={{padding:24}}>Bulk Upload Screen (stub)</div> }

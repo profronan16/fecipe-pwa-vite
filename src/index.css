@@ -1,0 +1,13 @@
+/* Reset básico + variáveis IFizinha/IFPR */
+:root{
+  --ifpr-green:#2f9e41;
+  --ifpr-red:#e63946;
+  --ifzinha-blue:#17A2B8;
+  --ifzinha-purple:#6F42C1;
+  --text:#343A40;
+  --bg:#ffffff;
+}
+*{box-sizing:border-box}
+html,body,#root{height:100%}
+body{margin:0;font-family:Inter,system-ui,Arial,Helvetica,sans-serif;color:var(--text);background:var(--bg)}
+a{color:inherit}

@@ -1,0 +1,1 @@
+export default function ProjectsScreen(){ return <div style={{padding:24}}>Projects Screen (stub)</div> }
