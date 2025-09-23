@@ -25,6 +25,10 @@ import { AuthProvider, useAuth } from "@contexts/AuthContext";
 import ProtectedRoute from "@components/ProtectedRoute";
 import RoleGuard from "@components/RoleGuard";
 import ForgotPassword from "@screens/Auth/ForgotPassword";
+import ReportsScreen from "@screens/Admin/ReportsScreen";
+import GeneralReport from "@screens/Admin/GeneralReport";
+import WinnersReport from "@screens/Admin/WinnersReport";
+import ChartsReport from "@screens/Admin/ChartsReport";
 
 const theme = createTheme({
   palette: { primary: { main: "#2f9e41" } },
@@ -73,11 +77,13 @@ export default function App() {
               <Route path="/admin/projects" element={<ProjectsScreen />} />
               <Route path="/admin/projects/new" element={<ProjectForm />} />
               <Route path="/admin/projects/:id/edit" element={<ProjectForm />} />
+              <Route path="/admin/reports/evaluators" element={<EvaluatorsPerformanceReport />} />
 
-              <Route
-                path="/admin/reports/evaluators"
-                element={<EvaluatorsPerformanceReport />}
-              />
+              <Route path="/admin/reports" element={<ReportsScreen />} />
+              <Route path="/admin/reports/general" element={<GeneralReport />} />
+              <Route path="/admin/reports/winners" element={<WinnersReport />} />
+              <Route path="/admin/reports/charts" element={<ChartsReport />} />
+              <Route path="/admin/reports/evaluators" element={<EvaluatorsPerformanceReport />} />
             </Route>
 
             {/* evaluator/admin */}
