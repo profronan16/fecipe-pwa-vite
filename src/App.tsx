@@ -3,12 +3,12 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import { CssBaseline, ThemeProvider, createTheme } from "@mui/material";
 
 import LoginScreen from "@screens/LoginScreen";
-import Unauthorized from "@screens/Unauthorized";
+import Unauthorized from "@screens/Auth/Unauthorized";
 import AdminDashboard from "@screens/Admin/AdminDashboard";
 import EvaluatorDashboard from "@screens/Admin/EvaluatorDashboard";
-import ProjectsScreen from "@screens/Projects/ProjectsScreen";
-import ProjectForm from "@screens/Projects/ProjectForm";
-import BulkUploadScreen from "@screens/BulkUpload/BulkUploadScreen";
+import ProjectsScreen from "@screens/Admin/ProjectsScreen";
+import ProjectForm from "@screens/Admin/ProjectForm";
+import BulkUploadScreen from "@screens/Admin/BulkUploadScreen";
 import WorkListScreen from "@screens/Work/WorkListScreen";
 import EvaluationScreen from "@screens/Evaluation/EvaluationScreen";
 import EvaluationsList from "@screens/Evaluation/EvaluationsList";
@@ -24,6 +24,7 @@ import EvaluatorsPerformanceReport from "@screens/Admin/EvaluatorsPerformanceRep
 import { AuthProvider, useAuth } from "@contexts/AuthContext";
 import ProtectedRoute from "@components/ProtectedRoute";
 import RoleGuard from "@components/RoleGuard";
+import ForgotPassword from "@screens/Auth/ForgotPassword";
 
 const theme = createTheme({
   palette: { primary: { main: "#2f9e41" } },
@@ -50,6 +51,7 @@ export default function App() {
           <Route path="/login" element={<LoginScreen />} />
           <Route path="/unauthorized" element={<Unauthorized />} />
 
+
           {/* protegido (usuário logado) */}
           <Route element={<ProtectedRoute />}>
             <Route path="/" element={<HomeRedirect />} />
@@ -66,6 +68,12 @@ export default function App() {
               <Route path="/admin/evaluators" element={<EvaluatorsScreen />} />
               <Route path="/admin/evaluators/new" element={<EvaluatorForm />} />
               <Route path="/admin/evaluators/:email" element={<EvaluatorForm />} />
+              <Route path="/evaluator/evaluate/:projectId" element={<EvaluationScreen />} />
+
+              <Route path="/admin/projects" element={<ProjectsScreen />} />
+              <Route path="/admin/projects/new" element={<ProjectForm />} />
+              <Route path="/admin/projects/:id/edit" element={<ProjectForm />} />
+
               <Route
                 path="/admin/reports/evaluators"
                 element={<EvaluatorsPerformanceReport />}
@@ -82,8 +90,11 @@ export default function App() {
               />
               <Route path="/evaluator/evaluations" element={<EvaluationsList />} />
               <Route path="/evaluator/profile" element={<ProfileScreen />} />
+
               {/* ✅ rota de redefinição de senha (faltava) */}
               <Route path="/evaluator/reset-password" element={<ResetPasswordScreen />} />
+              <Route path="/forgot-password" element={<ForgotPassword />} />
+
             </Route>
           </Route>
 
