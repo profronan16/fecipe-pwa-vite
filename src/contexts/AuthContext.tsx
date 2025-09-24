@@ -17,6 +17,9 @@ import {
 } from 'firebase/firestore'
 import { auth, db } from '@services/firebase'
 
+import { humanizeAuthError } from '@utils/authErrors'
+
+
 type Role = 'admin' | 'evaluator' | null
 
 type AuthContextType = {
@@ -24,6 +27,8 @@ type AuthContextType = {
   role: Role
   loading: boolean
   authError: string | null
+  authErrorCode: string | null
+  clearAuthError: () => void
   loginWithGoogle: () => Promise<void>
   loginWithPassword: (email: string, password: string) => Promise<void>
   registerWithPassword: (name: string, email: string, password: string) => Promise<void>
@@ -37,7 +42,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [role, setRole] = useState<Role>(null)
   const [loading, setLoading] = useState(true)
   const [authError, setAuthError] = useState<string | null>(null)
+  const [authErrorCode, setAuthErrorCode] = useState<string | null>(null)
 
+    const clearAuthError = () => { setAuthError(null); setAuthErrorCode(null) }
+
+    
   // Garante que o doc users/{email} exista e retorna o role
   const ensureUserProfile = async (u: User): Promise<Role> => {
     const email = u.email?.toLowerCase()
@@ -99,34 +108,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const loginWithGoogle = async () => {
-    setAuthError(null)
-    const provider = new GoogleAuthProvider()
-    const cred = await signInWithPopup(auth, provider)
-    // garante doc/role
-    await ensureUserProfile(cred.user)
+    clearAuthError()
+    try {
+      const provider = new GoogleAuthProvider()
+      const cred = await signInWithPopup(auth, provider)
+      await ensureUserProfile(cred.user)
+    } catch (e) {
+      const { code, message } = humanizeAuthError(e)
+      setAuthError(message); setAuthErrorCode(code)
+      throw e
+    }
   }
 
-  const loginWithPassword = async (email: string, password: string) => {
-    setAuthError(null)
-    const cred = await signInWithEmailAndPassword(auth, email, password)
-    await ensureUserProfile(cred.user)
+   const loginWithPassword = async (email: string, password: string) => {
+    clearAuthError()
+    try {
+      const cred = await signInWithEmailAndPassword(auth, email, password)
+      await ensureUserProfile(cred.user)
+    } catch (e) {
+      const { code, message } = humanizeAuthError(e)
+      setAuthError(message); setAuthErrorCode(code)
+      throw e
+    }
   }
 
-  const registerWithPassword = async (name: string, email: string, password: string) => {
-    setAuthError(null)
-    const cred = await createUserWithEmailAndPassword(auth, email, password)
-    if (name) await updateProfile(cred.user, { displayName: name })
-    // cria perfil com evaluator por padrão
-    const lower = (email || '').toLowerCase()
-    await setDoc(doc(db, 'users', lower), {
-      name: name || cred.user.displayName || '',
-      email: lower,
-      role: 'evaluator',
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-      active: true,
-    }, { merge: true })
-    setRole('evaluator')
+ const registerWithPassword = async (name: string, email: string, password: string) => {
+    clearAuthError()
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, email, password)
+      if (name) await updateProfile(cred.user, { displayName: name })
+      const lower = (email || '').toLowerCase()
+      await setDoc(doc(db, 'users', lower), {
+        name: name || cred.user.displayName || '',
+        email: lower,
+        role: 'evaluator',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        active: true,
+      }, { merge: true })
+      setRole('evaluator')
+    } catch (e) {
+      const { code, message } = humanizeAuthError(e)
+      setAuthError(message); setAuthErrorCode(code)
+      throw e
+    }
   }
 
   const logout = async () => {
@@ -135,9 +160,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const value = useMemo<AuthContextType>(() => ({
-    user, role, loading, authError,
+    user, role, loading,
+    authError, authErrorCode, clearAuthError,
     loginWithGoogle, loginWithPassword, registerWithPassword, logout,
-  }), [user, role, loading, authError])
+  }), [user, role, loading, authError, authErrorCode])
+
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

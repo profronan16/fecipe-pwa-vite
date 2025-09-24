@@ -38,13 +38,10 @@ const GoogleIcon = () => (
 
 export default function LoginScreen() {
   const {
-    user,
-    loginWithGoogle,
-    loginWithPassword,
-    registerWithPassword,
-    authError,
-    role,
-  } = useAuth();
+    user, role,
+    loginWithGoogle, loginWithPassword, registerWithPassword,
+    authError, authErrorCode, clearAuthError,
+  } = useAuth()
 
   const navigate = useNavigate();
   const location = useLocation() as { state?: { from?: string } };
@@ -58,20 +55,21 @@ export default function LoginScreen() {
   const from = useMemo(() => location?.state?.from || "/", [location]);
 
   // calcula destino seguro baseado em role + origem
-const computeTarget = (rawFrom: string, r: "admin" | "evaluator" | null) => {
-  if (rawFrom.startsWith("/admin") && r !== "admin") return "/evaluator"
-  if (rawFrom.startsWith("/evaluator") && r === "admin") return "/admin"
-  if (rawFrom === "/" || rawFrom === "") return r === "admin" ? "/admin" : "/evaluator"
-  return rawFrom
-}
+  const computeTarget = (rawFrom: string, r: "admin" | "evaluator" | null) => {
+    if (rawFrom.startsWith("/admin") && r !== "admin") return "/evaluator"
+    if (rawFrom.startsWith("/evaluator") && r === "admin") return "/admin"
+    if (rawFrom === "/" || rawFrom === "") return r === "admin" ? "/admin" : "/evaluator"
+    return rawFrom
+  }
 
+  useEffect(() => { clearAuthError() }, [mode]) // limpa quando troca login/registro
 
   useEffect(() => {
-  if (!user) return
-  if (role === null) return // <-- espere o role chegar
-  const target = computeTarget(from, role)
-  navigate(target, { replace: true })
-}, [user, role, from, navigate])
+    if (!user) return
+    if (role === null) return // <-- espere o role chegar
+    const target = computeTarget(from, role)
+    navigate(target, { replace: true })
+  }, [user, role, from, navigate])
 
   const handleEmailSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -98,6 +96,23 @@ const computeTarget = (rawFrom: string, r: "admin" | "evaluator" | null) => {
     }
   };
 
+  const handleEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (authError) clearAuthError()
+    setEmail(e.target.value)
+  }
+
+  const handlePasswordChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (authError) clearAuthError()
+    setPassword(e.target.value)
+  }
+  const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (authError) clearAuthError()
+    setName(e.target.value)
+  }
+
+  const emailError =
+    authErrorCode === 'auth/email-already-in-use' ||
+    authErrorCode === 'auth/invalid-email'
   return (
     <Container
       maxWidth="sm"
@@ -130,6 +145,7 @@ const computeTarget = (rawFrom: string, r: "admin" | "evaluator" | null) => {
               </Typography>
             </Box>
 
+            {/* >>> AQUI ENTRA O ALERT <<< */}
             {authError && (
               <Alert severity="error" sx={{ width: "100%" }}>
                 {authError}
@@ -146,7 +162,7 @@ const computeTarget = (rawFrom: string, r: "admin" | "evaluator" | null) => {
                 <TextField
                   label="Nome"
                   value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  onChange={handleNameChange}
                   fullWidth
                   required
                 />
@@ -155,15 +171,23 @@ const computeTarget = (rawFrom: string, r: "admin" | "evaluator" | null) => {
                 type="email"
                 label="E-mail"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={handleEmailChange}
                 fullWidth
                 required
+                error={emailError}
+                helperText={
+                  authErrorCode === 'auth/email-already-in-use'
+                    ? 'Este e-mail já está cadastrado. Faça login ou recupere a senha.'
+                    : authErrorCode === 'auth/invalid-email'
+                      ? 'Digite um e-mail válido.'
+                      : undefined
+                }
               />
               <TextField
                 type="password"
                 label="Senha"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={handlePasswordChange}
                 fullWidth
                 required
               />
@@ -175,6 +199,7 @@ const computeTarget = (rawFrom: string, r: "admin" | "evaluator" | null) => {
               >
                 {mode === "login" ? "Entrar" : "Criar conta"}
               </Button>
+
             </Stack>
 
             <Divider flexItem>ou</Divider>
