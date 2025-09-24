@@ -31,6 +31,9 @@ import WinnersReport from "@screens/Admin/WinnersReport";
 import ChartsReport from "@screens/Admin/ChartsReport";
 
 
+import AppShell from '@components/AppShell'
+
+
 const theme = createTheme({
   palette: { primary: { main: "#2f9e41" } },
 });
@@ -50,63 +53,50 @@ export default function App() {
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <AuthProvider>
-        <Routes>
-          {/* público */}
-          <Route path="/login" element={<LoginScreen />} />
-          <Route path="/unauthorized" element={<Unauthorized />} />
+         <Routes>
+      {/* públicas */}
+      <Route path="/login" element={<LoginScreen />} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/unauthorized" element={<Unauthorized />} />
 
+      {/* raiz protegida: decide destino */}
+      <Route element={<ProtectedRoute />}>
+        <Route path="/" element={<HomeRedirect />} />
+      </Route>
 
-          {/* protegido (usuário logado) */}
-          <Route element={<ProtectedRoute />}>
-            <Route path="/" element={<HomeRedirect />} />
+      {/* ÁREA LOGADA COM LAYOUT (avaliador + admin) */}
+      <Route element={<ProtectedRoute />}>
+        <Route element={<AppShell />}>
+          {/* Avaliador */}
+          <Route path="/evaluator" element={<EvaluatorDashboard />} />
+          <Route path="/evaluator/works" element={<WorkListScreen />} />
+          <Route path="/evaluator/evaluations" element={<EvaluationsList />} />
+          <Route path="/evaluator/evaluate/:projectId" element={<EvaluationScreen />} />
+          <Route path="/evaluator/profile" element={<ProfileScreen />} />
+          <Route path="/evaluator/reset-password" element={<ResetPasswordScreen />} />
 
-            {/* admin-only */}
-            <Route element={<RoleGuard allow={["admin"]} />}>
-              <Route path="/admin" element={<AdminDashboard />} />
-              <Route path="/admin/projects" element={<ProjectsScreen />} />
-              <Route path="/admin/projects/new" element={<ProjectForm />} />
-              <Route path="/admin/projects/:id" element={<ProjectForm />} />
-              <Route path="/admin/upload" element={<BulkUploadScreen />} />
-
-              {/* ✅ gestão de avaliadores + relatório (faltavam as rotas) */}
-              <Route path="/admin/evaluators" element={<EvaluatorsScreen />} />
-              <Route path="/admin/evaluators/new" element={<EvaluatorForm />} />
-              <Route path="/admin/evaluators/:email" element={<EvaluatorForm />} />
-              <Route path="/evaluator/evaluate/:projectId" element={<EvaluationScreen />} />
-
-              <Route path="/admin/projects" element={<ProjectsScreen />} />
-              <Route path="/admin/projects/new" element={<ProjectForm />} />
-              <Route path="/admin/projects/:id/edit" element={<ProjectForm />} />
-              <Route path="/admin/reports/evaluators" element={<EvaluatorsPerformanceReport />} />
-
-              <Route path="/admin/reports" element={<ReportsScreen />} />
-              <Route path="/admin/reports/general" element={<GeneralReport />} />
-              <Route path="/admin/reports/winners" element={<WinnersReport />} />
-              <Route path="/admin/reports/charts" element={<ChartsReport />} />
-              <Route path="/admin/reports/evaluators" element={<EvaluatorsPerformanceReport />} />
-            </Route>
-
-            {/* evaluator/admin */}
-            <Route element={<RoleGuard allow={["evaluator", "admin"]} />}>
-              <Route path="/evaluator" element={<EvaluatorDashboard />} />
-              <Route path="/evaluator/works" element={<WorkListScreen />} />
-              <Route
-                path="/evaluator/evaluate/:projectId"
-                element={<EvaluationScreen />}
-              />
-              <Route path="/evaluator/evaluations" element={<EvaluationsList />} />
-              <Route path="/evaluator/profile" element={<ProfileScreen />} />
-
-              {/* ✅ rota de redefinição de senha (faltava) */}
-              <Route path="/evaluator/reset-password" element={<ResetPasswordScreen />} />
-              <Route path="/forgot-password" element={<ForgotPassword />} />
-
-            </Route>
+          {/* Admin (protege com RoleGuard dentro do layout) */}
+          <Route element={<RoleGuard allow={['admin']} />}>
+            <Route path="/admin" element={<AdminDashboard />} />
+            <Route path="/admin/projects" element={<ProjectsScreen />} />
+            <Route path="/admin/projects/new" element={<ProjectForm />} />
+            <Route path="/admin/projects/:id/edit" element={<ProjectForm />} />
+            <Route path="/admin/projects/bulk" element={<BulkUploadScreen />} />
+            <Route path="/admin/evaluators" element={<EvaluatorsScreen />} />
+            <Route path="/admin/evaluators/new" element={<EvaluatorForm />} />
+            <Route path="/admin/evaluators/:id/edit" element={<EvaluatorForm />} />
+            <Route path="/admin/reports" element={<ReportsScreen />} />
+            <Route path="/admin/reports/general" element={<GeneralReport />} />
+            <Route path="/admin/reports/winners" element={<WinnersReport />} />
+            <Route path="/admin/reports/charts" element={<ChartsReport />} />
+            <Route path="/admin/reports/evaluators" element={<EvaluatorsPerformanceReport />} />
           </Route>
+        </Route>
+      </Route>
 
-          {/* fallback */}
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+      {/* fallback */}
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
       </AuthProvider>
     </ThemeProvider>
   );

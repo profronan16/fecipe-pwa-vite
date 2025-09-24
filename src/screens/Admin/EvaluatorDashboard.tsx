@@ -24,21 +24,21 @@ type EvalDoc = {
   notas?: Record<string, number>
 }
 
-export default function EvaluatorDashboard(){
+export default function EvaluatorDashboard() {
   const nav = useNavigate()
   const { user } = useAuth()
 
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string|null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   const [allProjects, setAllProjects] = useState<Project[]>([])
   const [myEvals, setMyEvals] = useState<EvalDoc[]>([])
-  const [projectTitleCache, setProjectTitleCache] = useState<Record<string,string>>({})
+  const [projectTitleCache, setProjectTitleCache] = useState<Record<string, string>>({})
 
-  const load = useCallback(async ()=>{
-    if(!user) return
+  const load = useCallback(async () => {
+    if (!user) return
     setLoading(true); setError(null)
-    try{
+    try {
       // 1) todos os trabalhos
       const projSnap = await getDocs(collection(db, 'trabalhos'))
       const projects: Project[] = projSnap.docs.map(d => {
@@ -60,121 +60,127 @@ export default function EvaluatorDashboard(){
 
       // 3) cache de títulos para "recentes"
       const uniq = Array.from(new Set(evals.map(e => e.trabalhoId))).slice(0, 5)
-      const cache: Record<string,string> = {}
-      await Promise.all(uniq.map(async pid=>{
-        if(!pid) return
+      const cache: Record<string, string> = {}
+      await Promise.all(uniq.map(async pid => {
+        if (!pid) return
         const s = await getDoc(doc(db, 'trabalhos', pid))
-        if(s.exists()){
+        if (s.exists()) {
           cache[pid] = (s.data() as any).titulo || '—'
         }
       }))
       setProjectTitleCache(cache)
-    }catch(e:any){
+    } catch (e: any) {
       setError(e?.message || 'Erro ao carregar dados')
-    }finally{
+    } finally {
       setLoading(false)
     }
   }, [user])
 
-  useEffect(()=>{ load() }, [load])
+  useEffect(() => { load() }, [load])
 
   // ----- métricas -----
-  const availableCount = useMemo(()=>{
-    if(!user) return 0
-    const done = new Set(myEvals.map(e=>e.trabalhoId))
+  const availableCount = useMemo(() => {
+    if (!user) return 0
+    const done = new Set(myEvals.map(e => e.trabalhoId))
     return allProjects.filter(p => !done.has(p.id)).length
   }, [allProjects, myEvals, user])
 
   const myEvaluationsCount = myEvals.length
 
-  const recent = useMemo(()=>{
+  const recent = useMemo(() => {
     // ordena por updatedAt/createdAt (quando disponível)
     const sortVal = (e: EvalDoc) => (e.updatedAt?.seconds || e.createdAt?.seconds || 0)
-    return [...myEvals].sort((a,b)=> sortVal(b) - sortVal(a)).slice(0, 3)
+    return [...myEvals].sort((a, b) => sortVal(b) - sortVal(a)).slice(0, 3)
   }, [myEvals])
 
   return (
-    <Box p={2}>
-      <Stack direction={{ xs:'column', sm:'row' }} gap={2} alignItems={{ xs:'stretch', sm:'center' }} mb={2}>
+    <>
+      <Stack
+        direction={{ xs: 'column', sm: 'row' }}
+        alignItems={{ xs: 'flex-start', sm: 'center' }}
+        justifyContent="space-between"
+        spacing={2}
+        sx={{ mb: 2 }}
+      >
         <Typography variant="h5" fontWeight={800}>👋 Bem-vindo(a) ao Painel do Avaliador</Typography>
         <Stack direction="row" gap={1} flexWrap="wrap">
           <Button variant="outlined" onClick={load}>Recarregar</Button>
         </Stack>
       </Stack>
 
-      {loading && <LinearProgress sx={{ mb:2 }} />}
-      {error && <Alert severity="error" sx={{ mb:2 }}>{error}</Alert>}
+      {loading && <LinearProgress sx={{ mb: 2 }} />}
+      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
-      <Grid container spacing={2} sx={{ mb: 2 }}>
-        <Grid item xs={12} md={4}>
-          <Card>
+      <Grid container spacing={2} sx={{ mb: 2 }} justifyContent="center">
+        <Grid item xs={12} sm={6} md={4}>
+          <Card sx={{ height: '100%' }}>
             <CardContent>
               <Typography variant="subtitle2" color="text.secondary">Trabalhos disponíveis</Typography>
               <Typography variant="h4" fontWeight={800}>{availableCount}</Typography>
               <Typography variant="body2" color="text.secondary">Ainda não avaliados por você</Typography>
             </CardContent>
-            <CardActions sx={{ justifyContent:'flex-end' }}>
-              <Button variant="contained" onClick={()=>nav('/evaluator/works')}>Ver trabalhos</Button>
+            <CardActions sx={{ justifyContent: 'flex-end' }}>
+              <Button variant="contained" onClick={() => nav('/evaluator/works')}>Ver trabalhos</Button>
             </CardActions>
           </Card>
         </Grid>
 
-        <Grid item xs={12} md={4}>
-          <Card>
+        <Grid item xs={12} sm={6} md={4}>
+          <Card sx={{ height: '100%' }}>
             <CardContent>
               <Typography variant="subtitle2" color="text.secondary">Minhas avaliações</Typography>
               <Typography variant="h4" fontWeight={800}>{myEvaluationsCount}</Typography>
               <Typography variant="body2" color="text.secondary">Total já registradas</Typography>
             </CardContent>
-            <CardActions sx={{ justifyContent:'flex-end' }}>
-              <Button variant="contained" onClick={()=>nav('/evaluator/evaluations')}>Ver avaliações</Button>
+            <CardActions sx={{ justifyContent: 'flex-end' }}>
+              <Button variant="contained" onClick={() => nav('/evaluator/evaluations')}>Ver avaliações</Button>
             </CardActions>
           </Card>
         </Grid>
 
-        <Grid item xs={12} md={4}>
-          <Card>
+        <Grid item xs={12} sm={6} md={4}>
+          <Card sx={{ height: '100%' }}>
             <CardContent>
               <Typography variant="subtitle2" color="text.secondary">Minha conta</Typography>
               <Typography variant="h5" fontWeight={800} noWrap>{user?.displayName || user?.email}</Typography>
               <Typography variant="body2" color="text.secondary">Editar nome, senha e sair</Typography>
             </CardContent>
-            <CardActions sx={{ justifyContent:'flex-end' }}>
-              <Button variant="contained" onClick={()=>nav('/evaluator/profile')}>Abrir perfil</Button>
+            <CardActions sx={{ justifyContent: 'flex-end' }}>
+              <Button variant="contained" onClick={() => nav('/evaluator/profile')}>Abrir perfil</Button>
             </CardActions>
           </Card>
         </Grid>
       </Grid>
 
-      <Grid container spacing={2}>
-        <Grid item xs={12} md={6}>
-          <Card>
+      <Grid container spacing={2} sx={{ mb: 2 }} justifyContent="center">
+        <Grid item xs={12} sm={6} md={4}>
+          <Card sx={{ height: '100%' }}>
             <CardContent>
               <Typography variant="h6" fontWeight={700} gutterBottom>Comece por aqui</Typography>
               <Stack direction="row" gap={1} flexWrap="wrap">
-                <Button variant="contained" onClick={()=>nav('/evaluator/works')}>Escolher trabalho</Button>
-                <Button variant="outlined" onClick={()=>nav('/evaluator/evaluations')}>Minhas avaliações</Button>
-                <Button variant="outlined" onClick={()=>nav('/evaluator/profile')}>Perfil</Button>
+                <Button variant="contained" onClick={() => nav('/evaluator/works')}>Escolher trabalho</Button>
+                <Button variant="outlined" onClick={() => nav('/evaluator/evaluations')}>Minhas avaliações</Button>
+                <Button variant="outlined" onClick={() => nav('/evaluator/profile')}>Perfil</Button>
               </Stack>
             </CardContent>
           </Card>
         </Grid>
 
-        <Grid item xs={12} md={6}>
-          <Card>
+        <Grid item xs={12} sm={6} md={4}>
+          <Card sx={{ height: '100%' }}>
             <CardContent>
               <Typography variant="h6" fontWeight={700} gutterBottom>Últimas avaliações</Typography>
               {!recent.length ? (
                 <Alert severity="info">Você ainda não avaliou nenhum projeto.</Alert>
               ) : (
                 <Stack gap={1}>
-                  {recent.map((e)=>(
+                  {recent.map((e) => (
                     <Stack
                       key={e.id}
                       direction="row"
                       alignItems="center"
                       justifyContent="space-between"
-                      sx={{ p:1, borderRadius:1, bgcolor:'#f7f9fc' }}
+                      sx={{ p: 1, borderRadius: 1, bgcolor: '#f7f9fc' }}
                     >
                       <Box minWidth={0}>
                         <Typography variant="subtitle2" noWrap>
@@ -187,7 +193,7 @@ export default function EvaluatorDashboard(){
                       <Button
                         size="small"
                         variant="outlined"
-                        onClick={()=>nav(`/evaluator/evaluate/${e.trabalhoId}?evaluationId=${e.id}`)}
+                        onClick={() => nav(`/evaluator/evaluate/${e.trabalhoId}?evaluationId=${e.id}`)}
                       >
                         Abrir
                       </Button>
@@ -199,6 +205,6 @@ export default function EvaluatorDashboard(){
           </Card>
         </Grid>
       </Grid>
-    </Box>
+    </>
   )
 }

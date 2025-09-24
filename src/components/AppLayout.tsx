@@ -6,19 +6,18 @@ import {
 } from '@mui/material'
 import MenuIcon from '@mui/icons-material/Menu'
 import DashboardIcon from '@mui/icons-material/Dashboard'
-import AssignmentIcon from '@mui/icons-material/Assignment'
 import AssessmentIcon from '@mui/icons-material/Assessment'
 import GroupIcon from '@mui/icons-material/Group'
-import UploadIcon from '@mui/icons-material/CloudUpload'
+import CloudUploadIcon from '@mui/icons-material/CloudUpload'
 import WorkIcon from '@mui/icons-material/Work'
 import ListAltIcon from '@mui/icons-material/ListAlt'
 import PersonIcon from '@mui/icons-material/Person'
 import LogoutIcon from '@mui/icons-material/Logout'
 import FolderIcon from '@mui/icons-material/Folder'
-import { useNavigate, NavLink, useLocation } from 'react-router-dom'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '@contexts/AuthContext'
 
-const DRAWER_WIDTH = 260
+const DRAWER_WIDTH = 240
 
 type MenuItem = { label: string; to: string; icon: JSX.Element }
 
@@ -30,8 +29,9 @@ export default function AppLayout({ children }: PropsWithChildren) {
   const [open, setOpen] = useState(false)
 
   const close = () => setOpen(false)
-  const toggle = () => setOpen((v) => !v)
+  const toggle = () => setOpen(v => !v)
 
+  // Itens por papel
   const evaluatorItems: MenuItem[] = [
     { label: 'Dashboard', to: '/evaluator', icon: <DashboardIcon /> },
     { label: 'Trabalhos', to: '/evaluator/works', icon: <WorkIcon /> },
@@ -42,16 +42,16 @@ export default function AppLayout({ children }: PropsWithChildren) {
   const adminItems: MenuItem[] = [
     { label: 'Dashboard', to: '/admin', icon: <DashboardIcon /> },
     { label: 'Projetos', to: '/admin/projects', icon: <FolderIcon /> },
-    { label: 'Importação em lote', to: '/admin/projects/bulk', icon: <UploadIcon /> },
+    { label: 'Importação em lote', to: '/admin/projects/bulk', icon: <CloudUploadIcon /> },
     { label: 'Avaliadores', to: '/admin/evaluators', icon: <GroupIcon /> },
     { label: 'Relatórios', to: '/admin/reports', icon: <AssessmentIcon /> },
   ]
 
   const items = role === 'admin' ? adminItems : evaluatorItems
 
+  // Título dinâmico simples
   const title = useMemo(() => {
-    // título simples baseado na rota atual
-    const map: Record<string,string> = {
+    const map: Record<string, string> = {
       '/admin': 'Admin',
       '/admin/projects': 'Projetos',
       '/admin/projects/bulk': 'Importação em lote',
@@ -68,9 +68,10 @@ export default function AppLayout({ children }: PropsWithChildren) {
 
   const DrawerContent = (
     <Box role="presentation" sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      {/* Cabeçalho do menu */}
       <Stack direction="row" alignItems="center" gap={1.5} sx={{ p: 2 }}>
         <Avatar sx={{ bgcolor: 'primary.main' }}>
-          {(user?.displayName || user?.email || 'U').slice(0,1).toUpperCase()}
+          {(user?.displayName || user?.email || 'U').slice(0, 1).toUpperCase()}
         </Avatar>
         <Box sx={{ minWidth: 0 }}>
           <Typography variant="subtitle2" noWrap fontWeight={700}>
@@ -84,8 +85,9 @@ export default function AppLayout({ children }: PropsWithChildren) {
 
       <Divider />
 
+      {/* Navegação */}
       <List sx={{ flex: 1, py: 1 }}>
-        {items.map((it) => (
+        {items.map(it => (
           <ListItemButton
             key={it.to}
             component={NavLink}
@@ -106,6 +108,7 @@ export default function AppLayout({ children }: PropsWithChildren) {
 
       <Divider />
 
+      {/* Sair */}
       <Box sx={{ p: 2 }}>
         <Button
           fullWidth
@@ -125,10 +128,14 @@ export default function AppLayout({ children }: PropsWithChildren) {
   )
 
   return (
-    <Box sx={{ display: 'flex', minHeight: '100dvh' }}>
-      {/* AppBar */}
-      <AppBar position="fixed" color="default" elevation={0}
-        sx={{ borderBottom: 1, borderColor: 'divider', zIndex: (t)=>t.zIndex.drawer + 1 }}>
+    <Box sx={{ display: 'flex', minHeight: '100dvh', bgcolor: 'background.default' }}>
+      {/* Topbar */}
+      <AppBar
+        position="fixed"
+        color="default"
+        elevation={0}
+        sx={{ borderBottom: 1, borderColor: 'divider', zIndex: t => t.zIndex.drawer + 1 }}
+      >
         <Toolbar>
           <IconButton edge="start" onClick={toggle} sx={{ mr: 2 }}>
             <MenuIcon />
@@ -136,7 +143,6 @@ export default function AppLayout({ children }: PropsWithChildren) {
           <Typography variant="h6" fontWeight={800} noWrap sx={{ flex: 1 }}>
             {title}
           </Typography>
-          {/* Espaço para ações do topo (se quiser adicionar algo depois) */}
         </Toolbar>
       </AppBar>
 
@@ -166,17 +172,23 @@ export default function AppLayout({ children }: PropsWithChildren) {
         </Drawer>
       )}
 
-      {/* Conteúdo */}
-      <Box
-        component="main"
-        sx={{
-          flex: 1,
-          p: 2,
-          mt: '64px', // altura do AppBar
-          ...(mdUp && { ml: `${DRAWER_WIDTH}px` }),
-        }}
-      >
-        {children}
+      {/* Conteúdo centralizado */}
+      <Box component="main" sx={{ flex: 1, ...(mdUp && { ml: `0px` }) }}>
+        {/* Espaço da AppBar */}
+        <Toolbar />
+
+        {/* Trilho central (largura máx) */}
+        <Box
+          sx={{
+            width: '100%',
+            maxWidth: 1200,
+            mx: 'auto',
+            px: { xs: 2, sm: 3 },
+            py: { xs: 2, sm: 3 },
+          }}
+        >
+          {children}
+        </Box>
       </Box>
     </Box>
   )

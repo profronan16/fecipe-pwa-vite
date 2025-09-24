@@ -50,22 +50,22 @@ export default function WinnersReport() {
     for (let i = 1; i <= k; i++) {
       const key = `C${i}`
       const arr = evals.map(e => e.notas?.[key] ?? 0)
-      const mean = arr.reduce((a,b)=>a+b,0) / (arr.length || 1)
-      const sd = Math.sqrt(arr.map(v => (v-mean)**2).reduce((a,b)=>a+b,0) / (arr.length || 1)) || 1
-      arr.forEach((v, idx)=>{
-        perEvalScores[idx] += ((v - mean)/sd + Z) * (WEIGHTS[i-1] ?? 1)
+      const mean = arr.reduce((a, b) => a + b, 0) / (arr.length || 1)
+      const sd = Math.sqrt(arr.map(v => (v - mean) ** 2).reduce((a, b) => a + b, 0) / (arr.length || 1)) || 1
+      arr.forEach((v, idx) => {
+        perEvalScores[idx] += ((v - mean) / sd + Z) * (WEIGHTS[i - 1] ?? 1)
       })
     }
-    return perEvalScores.reduce((a,b)=>a+b,0) / perEvalScores.length
+    return perEvalScores.reduce((a, b) => a + b, 0) / perEvalScores.length
   }
 
-  const load = useCallback(async ()=>{
+  const load = useCallback(async () => {
     setLoading(true); setError(null)
-    try{
+    try {
       // Carrega todos os projetos + avaliações uma única vez
       const [projSnap, evalSnap] = await Promise.all([
-        getDocs(collection(db,'trabalhos')),
-        getDocs(collection(db,'avaliacoes')),
+        getDocs(collection(db, 'trabalhos')),
+        getDocs(collection(db, 'avaliacoes')),
       ])
 
       const projects = projSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) })) as Project[]
@@ -73,8 +73,8 @@ export default function WinnersReport() {
 
       // Índice de avaliações por projeto
       const evalsByProject: Record<string, Evaluation[]> = {}
-      evals.forEach(e=>{
-        if(!e.trabalhoId) return
+      evals.forEach(e => {
+        if (!e.trabalhoId) return
         evalsByProject[e.trabalhoId] = evalsByProject[e.trabalhoId] || []
         evalsByProject[e.trabalhoId].push(e)
       })
@@ -93,10 +93,10 @@ export default function WinnersReport() {
           const evalTotals = list
             .map(e => ({
               who: e.evaluatorEmail || e.avaliadorId || '—',
-              total: Object.values<number>(e.notas || {}).reduce((a,b)=>a+b,0),
+              total: Object.values<number>(e.notas || {}).reduce((a, b) => a + b, 0),
             }))
-            .sort((a,b)=> b.total - a.total)
-            .slice(0,3)
+            .sort((a, b) => b.total - a.total)
+            .slice(0, 3)
 
           return {
             id: p.id,
@@ -107,29 +107,29 @@ export default function WinnersReport() {
             evaluators: evalTotals.map(e => e.who),
           }
         })
-        .sort((a,b)=> b.finalScore - a.finalScore)
-        .slice(0, 3)
-        .map((r, i) => ({ pos: i+1, ...r }))
+          .sort((a, b) => b.finalScore - a.finalScore)
+          .slice(0, 3)
+          .map((r, i) => ({ pos: i + 1, ...r }))
 
         perCat[cat] = scored
       }
 
       setData(perCat)
-    }catch(e:any){
+    } catch (e: any) {
       setError(e?.message || 'Erro ao carregar vencedores')
-    }finally{
+    } finally {
       setLoading(false)
     }
-  },[])
+  }, [])
 
-  useEffect(()=>{ load() }, [load])
+  useEffect(() => { load() }, [load])
 
-  const flatCSV = useMemo(()=>{
+  const flatCSV = useMemo(() => {
     // categoria;posicao;titulo;nota;turma;orientador;avaliadores
     const lines: string[] = []
     for (const cat of categories) {
       const rows = data[cat] || []
-      rows.forEach(r=>{
+      rows.forEach(r => {
         lines.push([
           cat,
           String(r.pos),
@@ -138,7 +138,7 @@ export default function WinnersReport() {
           r.turma || '',
           r.orientador || '',
           r.evaluators.join(' | ')
-        ].map(s => `"${String(s).replace(/"/g,'""')}"`).join(';'))
+        ].map(s => `"${String(s).replace(/"/g, '""')}"`).join(';'))
       })
     }
     return ['categoria;posicao;titulo;nota_final;turma;orientador;avaliadores', ...lines].join('\n')
@@ -156,7 +156,7 @@ export default function WinnersReport() {
 
   return (
     <Box p={2}>
-      <Stack direction={{ xs:'column', sm:'row' }} gap={2} alignItems={{ xs:'stretch', sm:'center' }} mb={2}>
+      <Stack direction={{ xs: 'column', sm: 'row' }} gap={2} alignItems={{ xs: 'stretch', sm: 'center' }} mb={2}>
         <Typography variant="h5" fontWeight={800}>🏆 Top 3 por Categoria</Typography>
         <Stack direction="row" gap={1} flexWrap="wrap">
           <Button variant="outlined" onClick={load}>Recarregar</Button>
@@ -164,8 +164,8 @@ export default function WinnersReport() {
         </Stack>
       </Stack>
 
-      {loading && <LinearProgress sx={{ mb:2 }}/>}
-      {error && <Alert severity="error" sx={{ mb:2 }}>{error}</Alert>}
+      {loading && <LinearProgress sx={{ mb: 2 }} />}
+      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
 
       {!categories.length && !loading ? (
         <Alert severity="info">Nenhuma categoria encontrada.</Alert>
@@ -177,41 +177,43 @@ export default function WinnersReport() {
           return (
             <Card key={cat}>
               <CardContent>
-                <Stack direction="row" gap={1} alignItems="center" mb={1}>
-                  <Chip color="primary" label={cat} />
-                  <Typography variant="subtitle2" color="text.secondary">
-                    {rows.length ? `Top ${rows.length}` : 'Sem projetos com avaliações'}
-                  </Typography>
-                </Stack>
+                <Box sx={{ width: '100%', overflowX: 'auto' }}>
+                  <Stack direction="row" gap={1} alignItems="center" mb={1}>
+                    <Chip color="primary" label={cat} />
+                    <Typography variant="subtitle2" color="text.secondary">
+                      {rows.length ? `Top ${rows.length}` : 'Sem projetos com avaliações'}
+                    </Typography>
+                  </Stack>
 
-                {!rows.length ? (
-                  <Alert severity="info">Sem projetos suficientes para ranquear.</Alert>
-                ) : (
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>Posição</TableCell>
-                        <TableCell>Título</TableCell>
-                        <TableCell>Turma</TableCell>
-                        <TableCell>Orientador</TableCell>
-                        <TableCell align="right">Nota Final</TableCell>
-                        <TableCell>Avaliadores (amostra)</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {rows.map(r=>(
-                        <TableRow key={r.id} hover>
-                          <TableCell>{r.pos}º</TableCell>
-                          <TableCell>{r.titulo}</TableCell>
-                          <TableCell>{r.turma || '—'}</TableCell>
-                          <TableCell>{r.orientador || '—'}</TableCell>
-                          <TableCell align="right">{r.finalScore.toFixed(2)}</TableCell>
-                          <TableCell>{r.evaluators.length ? r.evaluators.join(', ') : '—'}</TableCell>
+                  {!rows.length ? (
+                    <Alert severity="info">Sem projetos suficientes para ranquear.</Alert>
+                  ) : (
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Posição</TableCell>
+                          <TableCell>Título</TableCell>
+                          <TableCell>Turma</TableCell>
+                          <TableCell>Orientador</TableCell>
+                          <TableCell align="right">Nota Final</TableCell>
+                          <TableCell>Avaliadores (amostra)</TableCell>
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                )}
+                      </TableHead>
+                      <TableBody>
+                        {rows.map(r => (
+                          <TableRow key={r.id} hover>
+                            <TableCell>{r.pos}º</TableCell>
+                            <TableCell>{r.titulo}</TableCell>
+                            <TableCell>{r.turma || '—'}</TableCell>
+                            <TableCell>{r.orientador || '—'}</TableCell>
+                            <TableCell align="right">{r.finalScore.toFixed(2)}</TableCell>
+                            <TableCell>{r.evaluators.length ? r.evaluators.join(', ') : '—'}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </Box>
               </CardContent>
             </Card>
           )
