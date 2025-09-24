@@ -15,8 +15,7 @@ import {
 import {
   doc, getDoc, setDoc, serverTimestamp,
 } from 'firebase/firestore'
-import { auth } from '@services/firebase'
-import { db } from '@services/firebase'
+import { auth, db } from '@services/firebase'
 
 type Role = 'admin' | 'evaluator' | null
 
@@ -39,27 +38,61 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
   const [authError, setAuthError] = useState<string | null>(null)
 
-  // carrega claims/perfil (role) do Firestore
+  // Garante que o doc users/{email} exista e retorna o role
+  const ensureUserProfile = async (u: User): Promise<Role> => {
+    const email = u.email?.toLowerCase()
+    if (!email) return 'evaluator'
+    const ref = doc(db, 'users', email)
+    const snap = await getDoc(ref)
+    if (!snap.exists()) {
+      // cria perfil básico (ajuste se quiser default = 'admin' para seeds)
+      await setDoc(ref, {
+        name: u.displayName || '',
+        email,
+        role: 'evaluator',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        active: true,
+      }, { merge: true })
+      return 'evaluator'
+    }
+    const r = (snap.data() as any).role as Role
+    return r || 'evaluator'
+  }
+
   const loadRoleFromFirestore = async (u: User | null) => {
     if (!u?.email) { setRole(null); return }
-    try {
-      const s = await getDoc(doc(db, 'users', u.email))
-      if (s.exists()) {
-        const r = (s.data() as any).role as Role
-        setRole(r || 'evaluator')
-      } else {
-        // se não houver doc, assume evaluator
-        setRole('evaluator')
-      }
-    } catch {
+    const email = u.email.toLowerCase()
+    const ref = doc(db, 'users', email)
+    const snap = await getDoc(ref)
+    if (snap.exists()) {
+      const r = (snap.data() as any).role as Role
+      setRole(r || 'evaluator')
+    } else {
+      // se não houver doc, cria um básico e assume evaluator
+      await setDoc(ref, {
+        name: u.displayName || '',
+        email,
+        role: 'evaluator',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        active: true,
+      }, { merge: true })
       setRole('evaluator')
     }
   }
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (usr) => {
+      setLoading(true)
       setUser(usr)
-      await loadRoleFromFirestore(usr)
+      if (usr) {
+        // garante doc + pega role
+        const r = await ensureUserProfile(usr)
+        setRole(r)
+      } else {
+        setRole(null)
+      }
       setLoading(false)
     })
     return () => unsub()
@@ -68,46 +101,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const loginWithGoogle = async () => {
     setAuthError(null)
     const provider = new GoogleAuthProvider()
-    try {
-      await signInWithPopup(auth, provider)
-      // role será carregada no onAuthStateChanged
-    } catch (e: any) {
-      setAuthError(e?.message || 'Falha no login com Google')
-      throw e
-    }
+    const cred = await signInWithPopup(auth, provider)
+    // garante doc/role
+    await ensureUserProfile(cred.user)
   }
 
   const loginWithPassword = async (email: string, password: string) => {
     setAuthError(null)
-    try {
-      await signInWithEmailAndPassword(auth, email, password)
-      // role será carregada no onAuthStateChanged
-    } catch (e: any) {
-      setAuthError(e?.message || 'Falha no login')
-      throw e
-    }
+    const cred = await signInWithEmailAndPassword(auth, email, password)
+    await ensureUserProfile(cred.user)
   }
 
   const registerWithPassword = async (name: string, email: string, password: string) => {
     setAuthError(null)
-    try {
-      const cred = await createUserWithEmailAndPassword(auth, email, password)
-      if (name) {
-        await updateProfile(cred.user, { displayName: name })
-      }
-      // cria/atualiza perfil no Firestore
-      await setDoc(doc(db, 'users', email), {
-        name: name || cred.user.displayName || '',
-        email,
-        role: 'evaluator',                 // ajuste se quiser outra regra
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      }, { merge: true })
-      await loadRoleFromFirestore(cred.user)
-    } catch (e: any) {
-      setAuthError(e?.message || 'Falha no cadastro')
-      throw e
-    }
+    const cred = await createUserWithEmailAndPassword(auth, email, password)
+    if (name) await updateProfile(cred.user, { displayName: name })
+    // cria perfil com evaluator por padrão
+    const lower = (email || '').toLowerCase()
+    await setDoc(doc(db, 'users', lower), {
+      name: name || cred.user.displayName || '',
+      email: lower,
+      role: 'evaluator',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      active: true,
+    }, { merge: true })
+    setRole('evaluator')
   }
 
   const logout = async () => {

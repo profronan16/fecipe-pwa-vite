@@ -30,15 +30,15 @@ import GeneralReport from "@screens/Admin/GeneralReport";
 import WinnersReport from "@screens/Admin/WinnersReport";
 import ChartsReport from "@screens/Admin/ChartsReport";
 
+
 const theme = createTheme({
   palette: { primary: { main: "#2f9e41" } },
 });
 
 function HomeRedirect() {
-  const { user, role } = useAuth();
-  if (!user) return <Navigate to="/login" replace />;
-  if (role === "admin") return <Navigate to="/admin" replace />;
-  return <Navigate to="/evaluator" replace />;
+  const { role, loading } = useAuth()
+  if (loading || role === null) return null // espere o role
+  return <Navigate to={role === 'admin' ? '/admin' : '/evaluator'} replace />
 }
 
 export default function App() {
