@@ -16,6 +16,16 @@ import {
   sendPasswordResetEmail,
 } from "firebase/auth";
 
+type Evaluation = {
+  id: string
+  trabalhoId: string
+  evaluatorEmail?: string
+  avaliadorId?: string
+  notas: Record<string, number>
+  createdAt?: any
+  updatedAt?: any
+}
+
 // === AVALIAÇÕES (avaliacoes) ===
 
 // Lista avaliações do avaliador logado, ordenadas por data (se existir)
@@ -30,7 +40,18 @@ export async function listMyEvaluations(evaluatorUid: string) {
     /* ok se não existir */
   }
   const snap = await getDocs(q);
-  return snap.docs.map((d) => ({ id: d.id, ...d.data() })) as any[];
+  return snap.docs.map((d) => {
+    const data = d.data() as any
+    return {
+      id: d.id,
+      trabalhoId: String(data.trabalhoId ?? ''),
+      evaluatorEmail: data.evaluatorEmail,
+      avaliadorId: data.avaliadorId,
+      notas: (data.notas ?? {}) as Record<string, number>,
+      createdAt: data.createdAt,
+      updatedAt: data.updatedAt,
+    } as Evaluation
+  })
 }
 
 // Traz título do projeto a partir de trabalhos/{id}

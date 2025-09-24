@@ -1,0 +1,19 @@
+    name: Deploy para Hostinger VPS
+
+    on:
+      push:
+        branches:
+          - main # Or your desired branch
+
+    jobs:
+      deploy:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Deploy to Hostinger
+              uses: appleboy/scp-action@v1
+              with:
+                host: "72.60.138.113"
+                username: "root"
+                key: ${{ secrets.SSH_PRIVATE_KEY }}
+                source: "."
+                target: "/sistema"

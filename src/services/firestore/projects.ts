@@ -13,7 +13,16 @@ import {
   DocumentData,
 } from "firebase/firestore";
 import { db } from "@services/firebase";
-import type { Project } from "@models/models";
+
+export type Project = {
+  id: string
+  titulo: string
+  categoria: string
+  turma?: string
+  orientador?: string
+  alunos?: string[]
+  anoSemestre?: string
+}
 
 // 🔧 Coleção configurável: deixe "projects" (PWA) ou troque para "trabalhos" (seu RN).
 // Se preferir, defina VITE_FS_PROJECTS_COLLECTION no .env.local
@@ -50,7 +59,30 @@ const projectConverter: FirestoreDataConverter<Project> = {
 const projectsCol = collection(db, COLLECTION).withConverter(projectConverter);
 
 // ---------- CRUD / Consultas ----------
+// Lista geral
+export async function listProjects(): Promise<Project[]> {
+  const snap = await getDocs(collection(db, 'trabalhos'))
+  return snap.docs.map((d) => {
+    const data = d.data() as any
+    return {
+      id: d.id,
+      titulo: String(data.titulo ?? ''),
+      categoria: String(data.categoria ?? ''),
+      turma: data.turma ?? '',
+      orientador: data.orientador ?? '',
+      alunos: Array.isArray(data.alunos) ? data.alunos : [],
+      anoSemestre: data.anoSemestre ?? '',
+    } as Project
+  })
+}
 
+export async function patchProject(id: string, patch: Partial<Project>) {
+  const ref = doc(db, 'trabalhos', id)
+  return updateDoc(ref, {
+    ...patch,                 // aqui é o SEU patch tipado, não d.data()
+    updatedAt: new Date(),
+  } as any)
+}
 // Lista projetos por categoria (ou todos)
 export async function listProjectsByCategory(
   category?: string

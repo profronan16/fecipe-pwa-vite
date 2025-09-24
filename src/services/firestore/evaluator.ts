@@ -8,14 +8,31 @@ import {
   sendPasswordResetEmail,
 } from 'firebase/auth'
 
+export type EvaluatorProfile = {
+  id: string          // usamos o email como id do doc
+  name?: string
+  email: string
+  role: 'evaluator' | 'admin'
+  active?: boolean
+  categorias?: string[]
+}
 // === AVALIAÇÕES (avaliacoes) ===
 
 export async function listMyEvaluations(evaluatorUid: string) {
   let q: any = query(collection(db, 'avaliacoes'), where('avaliadorId', '==', evaluatorUid))
   try { q = query(q, orderBy('createdAt', 'desc')) } catch {}
   const snap = await getDocs(q)
-  return snap.docs.map(d => ({ id: d.id, ...d.data() })) as any[]
-}
+return snap.docs.map((d) => {
+  const data = d.data() as any
+  return {
+    id: d.id,
+    name: data.name || '',
+    email: data.email || d.id,
+    role: (data.role || 'evaluator') as 'evaluator' | 'admin',
+    active: data.active !== false,
+    categorias: Array.isArray(data.categorias) ? data.categorias : [],
+  } as EvaluatorProfile
+})}
 
 export async function getProjectTitle(trabalhoId: string) {
   const s = await getDoc(doc(db, 'trabalhos', trabalhoId))
