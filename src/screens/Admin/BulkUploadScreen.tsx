@@ -26,7 +26,7 @@ const CATEGORIES = [
   'Extensão',
   'Comunicação Oral',
   'IFTECH',
-  'Robótica',
+  'Feira de Ciências',
 ] // mesmas opções do formulário individual :contentReference[oaicite:1]{index=1}
 
 export default function BulkUploadScreen() {

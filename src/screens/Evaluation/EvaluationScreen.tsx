@@ -1,81 +1,97 @@
 // src/screens/Evaluation/EvaluationScreen.tsx
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   Box, Card, CardContent, Typography, Button,
-  TextField, LinearProgress, Alert, ToggleButton, ToggleButtonGroup, Stack
+  TextField, LinearProgress, ToggleButton, ToggleButtonGroup, Stack, Alert
 } from '@mui/material'
 import { doc, getDoc, addDoc, updateDoc, collection, serverTimestamp } from 'firebase/firestore'
 import { db } from '@services/firebase'
 import { useAuth } from '@contexts/AuthContext'
 
-// ---------- Critérios por categoria (portados do app mobile) ----------
+// ---------- Tipos ----------
 type Criterion = { label: string; values: number[] }
+type Params = { projectId: string }
 
+// ---------- Critérios por categoria (fieis ao edital) ----------
 const CRITERIA_DEFS: Record<string, Criterion[]> = {
   Ensino: [
-    { label: 'Domínio do estudante sobre o trabalho.', values: [0, 0.4, 0.9, 1.4, 1.8] },
+    { label: 'Domínio do(a) estudante sobre o trabalho.', values: [0, 0.4, 0.9, 1.4, 1.8] },
     { label: 'Clareza e objetividade da apresentação.', values: [0, 0.4, 0.8, 1.2, 1.6] },
     { label: 'Definição da proposta do projeto.', values: [0, 0.4, 0.7, 1.0, 1.4] },
-    { label: 'Elaboração do banner (aspectos visuais, diagramação, coesão).', values: [0, 0.3, 0.6, 0.9, 1.2] },
-    { label: 'Contribuição para melhoria do ensino e aprendizagem.', values: [0, 0.3, 0.6, 0.9, 1.2] },
-    { label: 'Metodologia inovadora e ressignificativa.', values: [0, 0.2, 0.4, 0.6, 0.8] },
-    { label: 'Contribuição para a sociedade e formação integral.', values: [0, 0.2, 0.4, 0.6, 0.8] },
+    { label: 'Elaboração do banner (aspectos visuais, diagramação, qualidade das imagens e do texto - uso da norma culta, coesão e coerência textual).', values: [0, 0.3, 0.6, 0.9, 1.2] },
+    { label: 'Contribuição do projeto para a melhoria do processo de ensino e aprendizagem.', values: [0, 0.3, 0.6, 0.9, 1.2] },
+    { label: 'Metodologia inovadora e ressignificativa para o processo de ensino e aprendizagem.', values: [0, 0.2, 0.4, 0.6, 0.8] },
+    { label: 'Contribuição do projeto para a sociedade, para a formação integral do estudante e para o processo de ensino e aprendizagem.', values: [0, 0.2, 0.4, 0.6, 0.8] },
     { label: 'Articulação entre ensino, pesquisa e extensão.', values: [0, 0.2, 0.3, 0.4, 0.6] },
     { label: 'Relevância social do projeto.', values: [0, 0.2, 0.3, 0.4, 0.6] },
   ],
+
   'Pesquisa/Inovação': [
-    { label: 'Domínio do estudante sobre o trabalho.', values: [0, 0.4, 0.9, 1.4, 1.8] },
+    { label: 'Domínio do(a) estudante sobre o trabalho.', values: [0, 0.4, 0.9, 1.4, 1.8] },
     { label: 'Clareza da apresentação.', values: [0, 0.4, 0.8, 1.2, 1.6] },
     { label: 'Definição da proposta do projeto.', values: [0, 0.4, 0.7, 1.0, 1.4] },
-    { label: 'Elaboração do banner (aspectos visuais, diagramação).', values: [0, 0.3, 0.6, 0.9, 1.2] },
-    { label: 'Conhecimento em relação à metodologia proposta.', values: [0, 0.3, 0.6, 0.9, 1.2] },
-    { label: 'Domínio teórico baseado em literatura científica.', values: [0, 0.2, 0.4, 0.6, 0.8] },
-    { label: 'Relação entre resultados e objetivos.', values: [0, 0.2, 0.4, 0.6, 0.8] },
-    { label: 'Relevância para a sociedade.', values: [0, 0.2, 0.3, 0.4, 0.6] },
+    { label: 'Elaboração do banner (aspectos visuais, diagramação, qualidade das imagens e do texto - uso da norma culta, coesão e coerência textual).', values: [0, 0.3, 0.6, 0.9, 1.2] },
+    { label: 'Conhecimento do(a) estudante em relação à metodologia proposta.', values: [0, 0.3, 0.6, 0.9, 1.2] },
+    { label: 'Domínio do(a) estudante sobre o trabalho, considerando a fundamentação teórica baseada em literatura científica.', values: [0, 0.2, 0.4, 0.6, 0.8] },
+    { label: 'Relação entre os resultados (esperados ou obtidos) e os objetivos do projeto.', values: [0, 0.2, 0.4, 0.6, 0.8] },
+    { label: 'Relevância da pesquisa e/ou inovação em relação à implementação e contribuição direta ou indireta para a sociedade.', values: [0, 0.2, 0.3, 0.4, 0.6] },
     { label: 'Interdisciplinaridade do projeto.', values: [0, 0.2, 0.3, 0.4, 0.6] },
   ],
+
   Extensão: [
-    { label: 'Domínio do estudante sobre o trabalho.', values: [0, 0.4, 0.9, 1.4, 1.8] },
+    { label: 'Domínio do(a) estudante sobre o trabalho.', values: [0, 0.4, 0.9, 1.4, 1.8] },
     { label: 'Clareza da apresentação.', values: [0, 0.4, 0.8, 1.2, 1.6] },
     { label: 'Definição da proposta do projeto.', values: [0, 0.4, 0.7, 1.0, 1.4] },
-    { label: 'Elaboração do banner (aspectos visuais, diagramação).', values: [0, 0.3, 0.6, 0.9, 1.2] },
-    { label: 'Participação da comunidade externa.', values: [0, 0.3, 0.6, 0.9, 1.2] },
-    { label: 'Potencial de impacto social/político/cultural.', values: [0, 0.2, 0.4, 0.6, 0.8] },
-    { label: 'Resultados obtidos e demandas atendidas.', values: [0, 0.2, 0.4, 0.6, 0.8] },
-    { label: 'Relação entre resultados e objetivos.', values: [0, 0.2, 0.3, 0.4, 0.6] },
+    { label: 'Elaboração do banner (aspectos visuais, diagramação, qualidade das imagens e do texto - uso da norma culta, coesão e coerência textual).', values: [0, 0.3, 0.6, 0.9, 1.2] },
+    { label: 'Participação evidente da comunidade externa nas ações de extensão.', values: [0, 0.3, 0.6, 0.9, 1.2] },
+    { label: 'Potencial de alterações sociais/políticas/culturais/econômicas na comunidade local/regional.', values: [0, 0.2, 0.4, 0.6, 0.8] },
+    { label: 'Resultados esperados e/ou ações obtidas com relação às demandas e problemas da comunidade local/regional.', values: [0, 0.2, 0.4, 0.6, 0.8] },
+    { label: 'Relação entre os resultados (esperados ou obtidos) e os objetivos do projeto.', values: [0, 0.2, 0.3, 0.4, 0.6] },
     { label: 'Interdisciplinaridade do projeto.', values: [0, 0.2, 0.3, 0.4, 0.6] },
   ],
+
   'Comunicação Oral': [
-    { label: 'Domínio do tema considerando fundamentação teórica.', values: [0, 0.4, 0.9, 1.4, 1.8] },
+    { label: 'Domínio do(a) estudante sobre o trabalho considerando a fundamentação teórica.', values: [0, 0.4, 0.9, 1.4, 1.8] },
     { label: 'Clareza e objetividade da apresentação.', values: [0, 0.4, 0.8, 1.2, 1.6] },
     { label: 'Definição da proposta do projeto.', values: [0, 0.4, 0.7, 1.0, 1.4] },
-    { label: 'Elaboração dos slides (visuais, texto, coesão).', values: [0, 0.3, 0.6, 0.9, 1.2] },
-    { label: 'Contribuição para experiência acadêmica e profissional.', values: [0, 0.3, 0.6, 0.9, 1.2] },
-    { label: 'Domínio e desenvoltura na apresentação.', values: [0, 0.2, 0.4, 0.6, 0.8] },
-    { label: 'Relação entre resultados e objetivos.', values: [0, 0.2, 0.4, 0.6, 0.8] },
-    { label: 'Relevância e contribuição social.', values: [0, 0.2, 0.3, 0.4, 0.6] },
-    { label: 'Domínio no uso de recursos audiovisuais.', values: [0, 0.2, 0.3, 0.4, 0.6] },
+    { label: 'Elaboração dos slides (aspectos visuais, diagramação, qualidade das imagens e do texto - uso da norma culta, coesão e coerência textual).', values: [0, 0.3, 0.6, 0.9, 1.2] },
+    { label: 'Contribuição do projeto para a experiência acadêmica e profissional do(a) estudante envolvido(a).', values: [0, 0.3, 0.6, 0.9, 1.2] },
+    { label: 'Domínio e desenvoltura do aluno na apresentação do trabalho.', values: [0, 0.2, 0.4, 0.6, 0.8] },
+    { label: 'Relação entre os resultados (esperados ou obtidos) e os objetivos do projeto.', values: [0, 0.2, 0.4, 0.6, 0.8] },
+    { label: 'Relevância do projeto em relação à implementação e contribuição direta ou indireta para a sociedade, para formação integral do estudante e para o processo de ensino e aprendizagem.', values: [0, 0.2, 0.3, 0.4, 0.6] },
+    { label: 'Domínio no uso dos recursos audiovisuais.', values: [0, 0.2, 0.3, 0.4, 0.6] },
   ],
+
   IFTECH: [
-    { label: 'Objetivos e métodos bem definidos?', values: [0, 0.25, 0.5, 1.0, 1.5] },
-    { label: 'Protótipo visa solucionar problemas locais?', values: [0, 0.5, 1.0, 1.5, 2.0] },
-    { label: 'Sustentabilidade e responsabilidade social?', values: [0, 0.25, 0.5, 0.75, 1.0] },
-    { label: 'Inovação e criatividade do protótipo?', values: [0, 0.5, 1.0, 1.5, 2.0] },
-    { label: 'Desempenho na explicação do protótipo.', values: [0, 0.25, 0.5, 1.0, 1.5] },
-    { label: 'Viabilidade técnica e aplicabilidade.', values: [0, 0.5, 1.0, 1.5, 2.0] },
+    { label: 'Os objetivos e os métodos do projeto são bem definidos, de acordo com o tema da feira?', values: [0, 0.25, 0.5, 1.0, 1.5] },
+    { label: 'O protótipo e/ou modelo desenvolvido visa solucionar problemas regionais e/ou locais, impactando positivamente na realidade da comunidade?', values: [0, 0.5, 1.0, 1.5, 2.0] },
+    { label: 'O protótipo e/ou modelo apresentado preza pela sustentabilidade e pela responsabilidade social?', values: [0, 0.25, 0.5, 0.75, 1.0] },
+    { label: 'O projeto garante a iniciação e inserção dos estudantes em atividades de pesquisa em desenvolvimento tecnológico e de inovação?', values: [0, 0.5, 1.0, 1.5, 2.0] },
+    { label: 'Desempenho do estudante durante a explicação sobre o funcionamento/aplicabilidade do protótipo e/ou modelo inovador', values: [0, 0.25, 0.5, 1.0, 1.5] },
+    { label: 'O projeto apresenta protótipo?', values: [0, 0.5, 1.0, 1.5, 2.0] },
   ],
-  Robótica: [
-    { label: 'Objetivos e métodos bem definidos?', values: [0, 0.25, 0.5, 1.0, 1.5] },
-    { label: 'Funcionalidade do robô.', values: [0, 0.5, 1.0, 1.5, 2.0] },
-    { label: 'Sustentabilidade e responsabilidade social?', values: [0, 0.25, 0.5, 0.75, 1.0] },
-    { label: 'Inovação e criatividade.', values: [0, 0.5, 1.0, 1.5, 2.0] },
-    { label: 'Desempenho na demonstração prática.', values: [0, 0.25, 0.5, 1.0, 1.5] },
-    { label: 'Viabilidade técnica.', values: [0, 0.5, 1.0, 1.5, 2.0] },
+
+  'Feira de Ciências': [
+    { label: 'Os objetivos e os métodos do projeto são bem definidos, incluindo diário de bordo e resumo expandido', values: [0, 0.25, 0.5, 1.0, 1.5] },
+    { label: 'O projeto possui o objetivo de solucionar problemas regionais e/ou locais, impactando positivamente na realidade da comunidade?', values: [0, 0.5, 1.0, 1.5, 2.0] },
+    { label: 'O projeto preza pela sustentabilidade e pela responsabilidade social?', values: [0, 0.25, 0.5, 1.0, 1.5] },
+    { label: 'O projeto garante a iniciação e inserção dos estudantes em atividades de pesquisa em desenvolvimento tecnológico e de inovação?', values: [0, 0.5, 1.0, 1.5, 2.0] },
+    { label: 'Desempenho dos estudantes durante a explicação do protótipo', values: [0, 0.25, 0.5, 1.0, 1.5] },
+    { label: 'Interdisciplinariedade do projeto apresentado', values: [0, 0.25, 0.5, 1.0, 1.5] },
   ],
 }
 
-type Params = { projectId: string }
+// ---------- Helpers ----------
+const formatScore = (v: number) => {
+  // Exibe com até 2 casas sem arredondamentos “enganosos” do edital (0.25, 0.75, etc.)
+  // Mantém 1 casa quando for “.0” ou “.5”; 2 casas quando precisar.
+  const isInt = Number.isInteger(v)
+  if (isInt) return `${v.toFixed(1)}`
+  const frac = Math.abs(v % 1)
+  if (Math.abs(frac - 0.5) < 1e-9) return `${v.toFixed(1)}`
+  return `${v.toFixed(2).replace(/\.?0+$/, '')}`
+}
 
 export default function EvaluationScreen() {
   const nav = useNavigate()
@@ -89,20 +105,25 @@ export default function EvaluationScreen() {
   const [criteria, setCriteria] = useState<Criterion[]>([])
   const [notas, setNotas] = useState<Array<number | null>>([])
   const [comentarios, setComentarios] = useState('')
+  const [erro, setErro] = useState<string | null>(null)
 
   useEffect(() => {
     let active = true
     ;(async () => {
       try {
+        setErro(null)
         const s = await getDoc(doc(db, 'trabalhos', projectId!))
         if (!s.exists()) throw new Error('Projeto não encontrado')
         const categoria = (s.data() as any).categoria as string
         const defs = CRITERIA_DEFS[categoria]
-        if (!defs) throw new Error('Categoria inválida')
+        if (!defs) throw new Error(`Categoria inválida ou não suportada pelo edital: ${categoria}`)
         if (!active) return
         setCriteria(defs)
+
+        // base para as notas
         const baseNotas = Array(defs.length).fill(null) as Array<number | null>
         let baseComent = ''
+
         if (evaluationId) {
           const e = await getDoc(doc(db, 'avaliacoes', evaluationId))
           if (e.exists()) {
@@ -111,11 +132,13 @@ export default function EvaluationScreen() {
             baseComent = data.comentarios || ''
           }
         }
+
         if (!active) return
         setNotas(baseNotas)
         setComentarios(baseComent)
-      } catch (err) {
+      } catch (err: any) {
         console.error(err)
+        if (active) setErro(err?.message || 'Erro ao carregar dados')
       } finally {
         if (active) setLoading(false)
       }
@@ -129,8 +152,10 @@ export default function EvaluationScreen() {
     setNotas(copy)
   }
 
+  const allFilled = useMemo(() => notas.length > 0 && notas.every((n) => n != null), [notas])
+
   const handleSubmit = async () => {
-    if (notas.some((n) => n == null)) {
+    if (!allFilled) {
       alert('Preencha todos os critérios')
       return
     }
@@ -163,6 +188,12 @@ export default function EvaluationScreen() {
     <Box p={2}>
       <Typography variant="h5" fontWeight={700} mb={2}>{titulo}</Typography>
 
+      {erro && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {erro}
+        </Alert>
+      )}
+
       <Stack spacing={2}>
         {criteria.map((c, idx) => (
           <Card key={idx} variant="outlined">
@@ -174,7 +205,9 @@ export default function EvaluationScreen() {
                 onChange={(_, v) => v != null && handlePick(idx, v)}
               >
                 {c.values.map((v) => (
-                  <ToggleButton key={v} value={v}>{v.toFixed(1)}</ToggleButton>
+                  <ToggleButton key={`${idx}-${v}`} value={v}>
+                    {formatScore(v)}
+                  </ToggleButton>
                 ))}
               </ToggleButtonGroup>
             </CardContent>
@@ -194,7 +227,7 @@ export default function EvaluationScreen() {
 
         <Stack direction="row" gap={1} justifyContent="flex-end">
           <Button variant="outlined" onClick={() => nav(-1)}>Cancelar</Button>
-          <Button variant="contained" onClick={handleSubmit}>Salvar avaliação</Button>
+          <Button variant="contained" onClick={handleSubmit} disabled={!allFilled}>Salvar avaliação</Button>
         </Stack>
       </Stack>
     </Box>

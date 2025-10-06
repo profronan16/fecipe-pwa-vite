@@ -22,6 +22,12 @@ export type Project = {
   orientador?: string
   alunos?: string[]
   anoSemestre?: string
+  banca?: string
+  autores?: string[]
+  assignedEvaluators?: string[]
+  status?: string
+  createdAt?: any
+  updatedAt?: any
 }
 
 // 🔧 Coleção configurável: deixe "projects" (PWA) ou troque para "trabalhos" (seu RN).
@@ -91,7 +97,7 @@ export async function listProjectsByCategory(
     ? query(projectsCol, where("categoria", "==", category), orderBy("titulo"))
     : query(projectsCol, orderBy("titulo"));
   const snap = await getDocs(q);
-  return snap.docs.map((d) => d.data());
+  return snap.docs.map((d) => d.data() as Project);
 }
 
 // Lista projetos atribuídos a um avaliador (filtrando opcionalmente por categoria)
@@ -111,7 +117,7 @@ export async function listAssignedWorks(
     );
   }
   const snap = await getDocs(q);
-  return snap.docs.map((d) => d.data());
+  return snap.docs.map((d) => d.data() as Project);
 }
 
 // Busca único projeto por id
@@ -128,6 +134,7 @@ export async function addProject(
   return addDoc(projectsCol, {
     ...data,
     createdAt: serverTimestamp(),
+    id: ""
   });
 }
 

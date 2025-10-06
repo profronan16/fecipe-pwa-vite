@@ -25,7 +25,7 @@ const CATEGORIES = [
   'Extensão',
   'Comunicação Oral',
   'IFTECH',
-  'Robótica',
+  'Feira de Ciências',
 ]
 
 export default function ProjectForm() {
