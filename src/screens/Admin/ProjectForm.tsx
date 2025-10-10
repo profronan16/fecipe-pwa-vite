@@ -2,17 +2,19 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   Box, Card, CardContent, Typography, TextField,
-  MenuItem, Button, Stack, LinearProgress, Alert
+  MenuItem, Button, Stack, LinearProgress, Alert,
+  Autocomplete, Chip, FormControlLabel, Switch
 } from '@mui/material'
 import { useNavigate, useParams } from 'react-router-dom'
-import {
-  addDoc, updateDoc, doc, collection, getDoc
-} from 'firebase/firestore'
+import { collection, doc as fsDoc } from 'firebase/firestore'
 import { db } from '@services/firebase'
+
+import { listUsers, UserRecord } from '@services/firestore/users'
+import { saveProject, getProject, Project } from '@services/firestore/projects'
 
 type FormState = {
   titulo: string
-  alunos: string        // no input: "nome1; nome2; ..."
+  alunos: string        // input em linha: "nome1; nome2; ..."
   orientador: string
   turma: string
   anoSemestre: string
@@ -29,14 +31,11 @@ const CATEGORIES = [
 ]
 
 export default function ProjectForm() {
-  const { id } = useParams<{ id: string }>()           // /new não tem id; /:id/edit tem
+  const { id } = useParams<{ id: string }>() // /new (sem id) | /:id/edit (com id)
   const isEdit = Boolean(id)
   const nav = useNavigate()
 
-  const [loading, setLoading] = useState<boolean>(!!id)
-  const [saving, setSaving] = useState(false)
-  const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
-
+  // --- estado base do formulário ---
   const [form, setForm] = useState<FormState>({
     titulo: '',
     alunos: '',
@@ -46,48 +45,93 @@ export default function ProjectForm() {
     categoria: '',
   })
 
+  const [loading, setLoading] = useState<boolean>(!!id)
+  const [saving, setSaving] = useState(false)
+  const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+  // --- estado dos avaliadores / visibilidade ---
+  const [allEvaluators, setAllEvaluators] = useState<UserRecord[]>([])
+  const [isPublic, setIsPublic] = useState(true) // true => ['ALL']
+  const [selectedEvaluators, setSelectedEvaluators] = useState<UserRecord[]>([])
+
+  // ===== Carregar avaliadores (admin/evaluator) =====
+  useEffect(() => {
+    (async () => {
+      try {
+        const users = await listUsers()
+        const evals = users.filter(u => u.role === 'evaluator' || u.role === 'admin')
+        setAllEvaluators(evals)
+      } catch (e) {
+        // silencioso; a UI ainda funciona (apenas sem autocomplete)
+      }
+    })()
+  }, [])
+
+  // ===== Se edição, carregar projeto e preencher o formulário =====
   useEffect(() => {
     let alive = true
-    const load = async () => {
+    ;(async () => {
       if (!id) return
       try {
-        const s = await getDoc(doc(db, 'trabalhos', id))
-        if (alive && s.exists()) {
-          const d = s.data() as any
-          setForm({
-            titulo: d.titulo || '',
-            alunos: Array.isArray(d.alunos) ? d.alunos.join('; ') : '',
-            orientador: d.orientador || '',
-            turma: d.turma || '',
-            anoSemestre: d.anoSemestre || '',
-            categoria: d.categoria || '',
-          })
+        const p = await getProject(id)
+        if (!p) {
+          if (alive) setMsg({ type: 'error', text: 'Projeto não encontrado' })
+          return
+        }
+        if (!alive) return
+
+        setForm({
+          titulo: p.titulo || '',
+          alunos: Array.isArray(p.alunos) ? p.alunos.join('; ') : '',
+          orientador: p.orientador || '',
+          turma: p.turma || '',
+          anoSemestre: p.anoSemestre || '',
+          categoria: p.categoria || '',
+        })
+
+        // visibilidade
+        const assigned = p.assignedEvaluators || ['ALL']
+        const pub = assigned.length === 1 && assigned[0] === 'ALL'
+        setIsPublic(pub)
+        if (!pub) {
+          const map = new Map(allEvaluators.map(u => [u.email.toLowerCase(), u]))
+          const chosen = assigned
+            .map(e => map.get(String(e || '').toLowerCase()))
+            .filter(Boolean) as UserRecord[]
+          setSelectedEvaluators(chosen)
+        } else {
+          setSelectedEvaluators([])
         }
       } catch (e: any) {
-        setMsg({ type: 'error', text: e?.message || 'Erro ao carregar projeto' })
+        if (alive) setMsg({ type: 'error', text: e?.message || 'Erro ao carregar projeto' })
       } finally {
         if (alive) setLoading(false)
       }
+    })()
+    return () => {
+      alive = false
     }
-    load()
-    return () => { alive = false }
-  }, [id])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, allEvaluators])
 
+  // ===== Validação simples =====
   const valid = useMemo(() => {
     const f = form
-    return f.titulo.trim()
-      && f.alunos.trim()
+    return Boolean(
+      f.titulo.trim()
       && f.orientador.trim()
       && f.turma.trim()
       && f.anoSemestre.trim()
       && f.categoria
+    )
   }, [form])
 
   const handleChange =
     (key: keyof FormState) =>
-    (e: React.ChangeEvent<HTMLInputElement>) =>
-      setForm((s) => ({ ...s, [key]: e.target.value }))
+      (e: React.ChangeEvent<HTMLInputElement>) =>
+        setForm(s => ({ ...s, [key]: e.target.value }))
 
+  // ===== Submit =====
   const handleSubmit = async () => {
     if (!valid) {
       setMsg({ type: 'error', text: 'Preencha todos os campos obrigatórios' })
@@ -95,23 +139,27 @@ export default function ProjectForm() {
     }
     setSaving(true)
     setMsg(null)
-    const payload = {
+
+    const assigned = isPublic
+      ? ['ALL']
+      : Array.from(new Set(selectedEvaluators.map(u => u.email.toLowerCase())))
+
+    const payload: Project = {
+      id: isEdit && id ? id : generateProjectId(),
       titulo: form.titulo.trim(),
       alunos: form.alunos
         .split(';')
-        .map((s) => s.trim())
+        .map(s => s.trim())
         .filter(Boolean),
       orientador: form.orientador.trim(),
       turma: form.turma.trim(),
       anoSemestre: form.anoSemestre.trim(),
       categoria: form.categoria,
+      assignedEvaluators: assigned,
     }
+
     try {
-      if (isEdit) {
-        await updateDoc(doc(db, 'trabalhos', id!), payload)
-      } else {
-        await addDoc(collection(db, 'trabalhos'), payload)
-      }
+      await saveProject(payload)
       setMsg({ type: 'success', text: 'Projeto salvo com sucesso' })
       nav('/admin/projects')
     } catch (e: any) {
@@ -122,8 +170,13 @@ export default function ProjectForm() {
   }
 
   return (
-    <Box p={2} maxWidth={760} mx="auto">
-      <Stack direction="row" alignItems="center" justifyContent="space-between" mb={2} gap={2}>
+    <Box maxWidth={760} mx="auto">
+      <Stack
+        direction={{ xs: 'column', sm: 'row' }}
+        alignItems={{ xs: 'flex-start', sm: 'center' }}
+        justifyContent="space-between"
+        mb={2} gap={2}
+      >
         <Typography variant="h5" fontWeight={800}>
           {isEdit ? 'Editar Projeto' : 'Novo Projeto'}
         </Typography>
@@ -153,7 +206,6 @@ export default function ProjectForm() {
               label='Alunos (separados por ";")'
               value={form.alunos}
               onChange={handleChange('alunos')}
-              required
               fullWidth
               multiline
               minRows={2}
@@ -197,9 +249,53 @@ export default function ProjectForm() {
                 <MenuItem key={c} value={c}>{c}</MenuItem>
               ))}
             </TextField>
+
+            {/* Visibilidade */}
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={isPublic}
+                  onChange={(e) => setIsPublic(e.target.checked)}
+                />
+              }
+              label="Disponível para todos os avaliadores"
+            />
+
+            {!isPublic && (
+              <Autocomplete
+                multiple
+                options={allEvaluators}
+                value={selectedEvaluators}
+                onChange={(_, value) => setSelectedEvaluators(value)}
+                getOptionLabel={(o) => o.name ? `${o.name} (${o.email})` : o.email}
+                renderTags={(value, getTagProps) =>
+                  value.map((option, index) => (
+                    <Chip
+                      {...getTagProps({ index })}
+                      key={option.email}
+                      label={option.name ? `${option.name} (${option.email})` : option.email}
+                    />
+                  ))
+                }
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    label="Avaliadores vinculados"
+                    placeholder="Selecione avaliadores"
+                    helperText="Se nenhum avaliador for selecionado, o projeto ficará visível para todos."
+                  />
+                )}
+              />
+            )}
           </Stack>
         </CardContent>
       </Card>
     </Box>
   )
+}
+
+/** Gera um id de projeto quando criando novo (usa Firestore para manter padrão) */
+function generateProjectId(): string {
+  // cria uma referência vazia para obter um id consistente com o Firestore
+  return fsDoc(collection(db, 'trabalhos')).id
 }

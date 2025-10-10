@@ -1,173 +1,257 @@
-// src/screens/Admin/EvaluatorsScreen.tsx
-import { useCallback, useEffect, useMemo, useState } from 'react'
+// src/screens/Evaluation/EvaluationScreen.tsx
+import { useEffect, useMemo, useState } from 'react'
+import { useNavigate, useParams, useSearchParams, Navigate } from 'react-router-dom'
 import {
-  Box, Stack, Typography, Button, TextField, Chip,
-  Card, CardContent, CardActions, IconButton, Tooltip,
-  LinearProgress, Alert, Switch, FormControlLabel
+  Box, Card, CardContent, Typography, Button,
+  TextField, LinearProgress, ToggleButton, ToggleButtonGroup, Stack, Alert
 } from '@mui/material'
-import AddIcon from '@mui/icons-material/Add'
-import EditIcon from '@mui/icons-material/Edit'
-import DeleteIcon from '@mui/icons-material/Delete'
-import { collection, deleteDoc, doc, getDocs, query, updateDoc, where } from 'firebase/firestore'
+import { doc, getDocs, query, where, addDoc, updateDoc, collection, serverTimestamp } from 'firebase/firestore'
 import { db } from '@services/firebase'
-import { useNavigate } from 'react-router-dom'
+import { useAuth } from '@contexts/AuthContext'
+import { getProject, Project } from '@services/firestore/projects'
 
-type Evaluator = {
-  id: string            // usamos o email como id do doc
-  name?: string
-  email: string
-  role: 'evaluator' | 'admin'
-  active?: boolean
-  categorias?: string[] // opcional: categorias habilitadas
+type Criterion = { label: string; values: number[] }
+type Params = { projectId: string }
+
+// ====== helpers de normalização ======
+const stripNbsp = (s: string) => s.replace(/\u00A0/g, ' ')
+const normalize = (s: string) =>
+  stripNbsp(s || '')
+    .normalize('NFD') // separa acentos
+    .replace(/\p{Diacritic}/gu, '') // remove acentos
+    .replace(/\s+/g, ' ') // colapsa espaços
+    .trim()
+    .toLowerCase()
+
+const CATEGORY_CANON = {
+  'ensino': 'Ensino',
+  'pesquisa/inovacao': 'Pesquisa/Inovação',
+  'pesquisa inovacao': 'Pesquisa/Inovação',
+  'extensao': 'Extensão',
+  'comunicacao oral': 'Comunicação Oral',
+  'iftech': 'IFTECH',
+  'feira de ciencias': 'Feira de Ciências',
+} as const
+type CanonKey = typeof CATEGORY_CANON[keyof typeof CATEGORY_CANON]
+
+// ========= TODOS OS CRITÉRIOS =========
+const CRITERIA_DEFS: Record<CanonKey, Criterion[]> = {
+  Ensino: [
+    { label: 'Domínio do(a) estudante sobre o trabalho.', values: [0, 0.4, 0.9, 1.4, 1.8] },
+    { label: 'Clareza e objetividade da apresentação.', values: [0, 0.4, 0.8, 1.2, 1.6] },
+    { label: 'Definição da proposta do projeto.', values: [0, 0.4, 0.7, 1.0, 1.4] },
+    { label: 'Elaboração do banner (aspectos visuais, diagramação, qualidade das imagens e do texto - uso da norma culta, coesão e coerência textual).', values: [0, 0.3, 0.6, 0.9, 1.2] },
+    { label: 'Contribuição do projeto para a melhoria do processo de ensino e aprendizagem.', values: [0, 0.3, 0.6, 0.9, 1.2] },
+    { label: 'Metodologia inovadora e ressignificativa para o processo de ensino e aprendizagem.', values: [0, 0.2, 0.4, 0.6, 0.8] },
+    { label: 'Contribuição do projeto para a sociedade, para a formação integral do estudante e para o processo de ensino e aprendizagem.', values: [0, 0.2, 0.4, 0.6, 0.8] },
+    { label: 'Articulação entre ensino, pesquisa e extensão.', values: [0, 0.2, 0.3, 0.4, 0.6] },
+    { label: 'Relevância social do projeto.', values: [0, 0.2, 0.3, 0.4, 0.6] },
+  ],
+  'Pesquisa/Inovação': [
+    { label: 'Domínio do(a) estudante sobre o trabalho.', values: [0, 0.4, 0.9, 1.4, 1.8] },
+    { label: 'Clareza da apresentação.', values: [0, 0.4, 0.8, 1.2, 1.6] },
+    { label: 'Definição da proposta do projeto.', values: [0, 0.4, 0.7, 1.0, 1.4] },
+    { label: 'Elaboração do banner (aspectos visuais, diagramação, qualidade das imagens e do texto - uso da norma culta, coesão e coerência textual).', values: [0, 0.3, 0.6, 0.9, 1.2] },
+    { label: 'Conhecimento do(a) estudante em relação à metodologia proposta.', values: [0, 0.3, 0.6, 0.9, 1.2] },
+    { label: 'Domínio do(a) estudante sobre o trabalho, considerando a fundamentação teórica baseada em literatura científica.', values: [0, 0.2, 0.4, 0.6, 0.8] },
+    { label: 'Relação entre os resultados (esperados ou obtidos) e os objetivos do projeto.', values: [0, 0.2, 0.4, 0.6, 0.8] },
+    { label: 'Relevância da pesquisa e/ou inovação em relação à implementação e contribuição direta ou indireta para a sociedade.', values: [0, 0.2, 0.3, 0.4, 0.6] },
+    { label: 'Interdisciplinaridade do projeto.', values: [0, 0.2, 0.3, 0.4, 0.6] },
+  ],
+  Extensão: [
+    { label: 'Domínio do(a) estudante sobre o trabalho.', values: [0, 0.4, 0.9, 1.4, 1.8] },
+    { label: 'Clareza da apresentação.', values: [0, 0.4, 0.8, 1.2, 1.6] },
+    { label: 'Definição da proposta do projeto.', values: [0, 0.4, 0.7, 1.0, 1.4] },
+    { label: 'Elaboração do banner (aspectos visuais, diagramação, qualidade das imagens e do texto - uso da norma culta, coesão e coerência textual).', values: [0, 0.3, 0.6, 0.9, 1.2] },
+    { label: 'Participação evidente da comunidade externa nas ações de extensão.', values: [0, 0.3, 0.6, 0.9, 1.2] },
+    { label: 'Potencial de alterações sociais/políticas/culturais/econômicas na comunidade local/regional.', values: [0, 0.2, 0.4, 0.6, 0.8] },
+    { label: 'Resultados esperados e/ou ações obtidas com relação às demandas e problemas da comunidade local/regional.', values: [0, 0.2, 0.4, 0.6, 0.8] },
+    { label: 'Relação entre os resultados (esperados ou obtidos) e os objetivos do projeto.', values: [0, 0.2, 0.3, 0.4, 0.6] },
+    { label: 'Interdisciplinaridade do projeto.', values: [0, 0.2, 0.3, 0.4, 0.6] },
+  ],
+  'Comunicação Oral': [
+    { label: 'Domínio do(a) estudante sobre o trabalho considerando a fundamentação teórica.', values: [0, 0.4, 0.9, 1.4, 1.8] },
+    { label: 'Clareza e objetividade da apresentação.', values: [0, 0.4, 0.8, 1.2, 1.6] },
+    { label: 'Definição da proposta do projeto.', values: [0, 0.4, 0.7, 1.0, 1.4] },
+    { label: 'Elaboração dos slides (aspectos visuais, diagramação, qualidade das imagens e do texto - uso da norma culta, coesão e coerência textual).', values: [0, 0.3, 0.6, 0.9, 1.2] },
+    { label: 'Contribuição do projeto para a experiência acadêmica e profissional do(a) estudante envolvido(a).', values: [0, 0.3, 0.6, 0.9, 1.2] },
+    { label: 'Domínio e desenvoltura do aluno na apresentação do trabalho.', values: [0, 0.2, 0.4, 0.6, 0.8] },
+    { label: 'Relação entre os resultados (esperados ou obtidos) e os objetivos do projeto.', values: [0, 0.2, 0.4, 0.6, 0.8] },
+    { label: 'Relevância do projeto em relação à implementação e contribuição direta ou indireta para a sociedade, para formação integral do estudante e para o processo de ensino e aprendizagem.', values: [0, 0.2, 0.3, 0.4, 0.6] },
+    { label: 'Domínio no uso dos recursos audiovisuais.', values: [0, 0.2, 0.3, 0.4, 0.6] },
+  ],
+  IFTECH: [
+    { label: 'Os objetivos e os métodos do projeto são bem definidos, de acordo com o tema da feira?', values: [0, 0.25, 0.5, 1.0, 1.5] },
+    { label: 'O protótipo e/ou modelo desenvolvido visa solucionar problemas regionais e/ou locais, impactando positivamente na realidade da comunidade?', values: [0, 0.5, 1.0, 1.5, 2.0] },
+    { label: 'O protótipo e/ou modelo apresentado preza pela sustentabilidade e pela responsabilidade social?', values: [0, 0.25, 0.5, 0.75, 1.0] },
+    { label: 'O projeto garante a iniciação e inserção dos estudantes em atividades de pesquisa em desenvolvimento tecnológico e de inovação?', values: [0, 0.5, 1.0, 1.5, 2.0] },
+    { label: 'Desempenho do estudante durante a explicação sobre o funcionamento/aplicabilidade do protótipo e/ou modelo inovador', values: [0, 0.25, 0.5, 1.0, 1.5] },
+    { label: 'O projeto apresenta protótipo?', values: [0, 0.5, 1.0, 1.5, 2.0] },
+  ],
+  'Feira de Ciências': [
+    { label: 'Os objetivos e os métodos do projeto são bem definidos, incluindo diário de bordo e resumo expandido', values: [0, 0.25, 0.5, 1.0, 1.5] },
+    { label: 'O projeto possui o objetivo de solucionar problemas regionais e/ou locais, impactando positivamente na realidade da comunidade?', values: [0, 0.5, 1.0, 1.5, 2.0] },
+    { label: 'O projeto preza pela sustentabilidade e pela responsabilidade social?', values: [0, 0.25, 0.5, 1.0, 1.5] },
+    { label: 'O projeto garante a iniciação e inserção dos estudantes em atividades de pesquisa em desenvolvimento tecnológico e de inovação?', values: [0, 0.5, 1.0, 1.5, 2.0] },
+    { label: 'Desempenho dos estudantes durante a explicação do protótipo', values: [0, 0.25, 0.5, 1.0, 1.5] },
+    { label: 'Interdisciplinariedade do projeto apresentado', values: [0, 0.25, 0.5, 1.0, 1.5] },
+  ],
 }
 
-export default function EvaluatorsScreen(){
+// formatador de nota para exibir
+const formatScore = (v: number) => v.toFixed(2).replace(/\.?0+$/, '')
+
+export default function EvaluationScreen() {
   const nav = useNavigate()
+  const { projectId } = useParams<Params>()
+  const [qs] = useSearchParams()
+  const titulo = qs.get('titulo') || 'Projeto'
+
+  const { user, role } = useAuth()
+  const [project, setProject] = useState<Project | null>(null)
+  const [criteria, setCriteria] = useState<Criterion[]>([])
+  const [notas, setNotas] = useState<Array<number | null>>([])
+  const [comentarios, setComentarios] = useState('')
   const [loading, setLoading] = useState(true)
-  const [items, setItems] = useState<Evaluator[]>([])
-  const [search, setSearch] = useState('')
-  const [onlyActive, setOnlyActive] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [erro, setErro] = useState<string | null>(null)
 
-  const load = useCallback(async ()=>{
-    setLoading(true); setError(null)
-    try{
-      // Busca perfis com role evaluator (ou admin, se quiser ver todos)
-      const q = query(collection(db,'users'), where('role','in',['evaluator','admin']))
-      const snap = await getDocs(q)
-      const list: Evaluator[] = snap.docs.map(d=>{
-        const data = d.data() as any
-        return {
-          id: d.id,
-          name: data.name || '',
-          email: data.email || d.id,
-          role: (data.role || 'evaluator') as any,
-          active: data.active !== false,        // default true
-          categorias: Array.isArray(data.categorias) ? data.categorias : undefined,
-        }
-      })
-      setItems(list)
-    }catch(e:any){
-      setError(e?.message || 'Erro ao carregar avaliadores')
-    }finally{
-      setLoading(false)
+  useEffect(() => {
+    let active = true
+    ;(async () => {
+      try {
+        const p = await getProject(projectId!)
+        if (!p) throw new Error('Projeto não encontrado')
+        if (!active) return
+        setProject(p)
+
+        // normaliza e resolve chave canônica
+        const key = CATEGORY_CANON[normalize(p.categoria || '') as keyof typeof CATEGORY_CANON]
+        const defs = key ? CRITERIA_DEFS[key] : undefined
+        if (!defs) throw new Error(`Categoria inválida ou não suportada: ${p.categoria}`)
+        setCriteria(defs)
+        setNotas(Array(defs.length).fill(null))
+      } catch (e: any) {
+        if (active) setErro(e?.message || 'Erro ao carregar projeto')
+      } finally {
+        if (active) setLoading(false)
+      }
+    })()
+    return () => { active = false }
+  }, [projectId])
+
+  const canSee = useMemo(() => {
+    if (!project) return false
+    if (role === 'admin') return true
+    const assigned = project.assignedEvaluators || ['ALL']
+    if (assigned.includes('ALL')) return true
+    const email = user?.email?.toLowerCase()
+    return email ? assigned.includes(email) : false
+  }, [project, role, user])
+
+  const handlePick = (idx: number, value: number) => {
+    const copy = [...notas]
+    copy[idx] = value
+    setNotas(copy)
+  }
+
+  const allFilled = useMemo(() => notas.length > 0 && notas.every((n) => n != null), [notas])
+
+  const handleSubmit = async () => {
+    if (!allFilled) {
+      alert('Preencha todos os critérios antes de salvar.')
+      return
     }
-  },[])
+    try {
+      setLoading(true)
+      const notasObj: Record<string, number> = {}
+      notas.forEach((n, i) => (notasObj[`C${i + 1}`] = n!))
 
-  useEffect(()=>{ load() }, [load])
-
-  const filtered = useMemo(()=>{
-    const term = search.trim().toLowerCase()
-    return items
-      .filter(i => (onlyActive ? i.active !== false : true))
-      .filter(i =>
-        !term ||
-        i.email.toLowerCase().includes(term) ||
-        (i.name || '').toLowerCase().includes(term)
+      const q = query(
+        collection(db, 'avaliacoes'),
+        where('trabalhoId', '==', projectId),
+        where('avaliadorId', '==', user!.uid)
       )
-      .sort((a,b)=> (a.name||a.email).localeCompare(b.name||b.email))
-  }, [items, search, onlyActive])
+      const snap = await getDocs(q)
+      const payload = {
+        trabalhoId: projectId,
+        avaliadorId: user!.uid,
+        evaluatorEmail: user!.email,
+        notas: notasObj,
+        comentarios,
+        timestamp: serverTimestamp(),
+      }
 
-  const toggleActive = async (it: Evaluator) => {
-    setLoading(true)
-    try{
-      await updateDoc(doc(db,'users', it.id), { active: it.active === false ? true : false })
-      await load()
-    }catch(e:any){
-      setError(e?.message || 'Erro ao atualizar status')
+      if (!snap.empty) {
+        await updateDoc(doc(db, 'avaliacoes', snap.docs[0].id), payload)
+      } else {
+        await addDoc(collection(db, 'avaliacoes'), payload)
+      }
+
+      nav('/evaluator/evaluations')
+    } catch (e: any) {
+      setErro(e?.message || 'Erro ao salvar avaliação')
+    } finally {
       setLoading(false)
     }
   }
 
-  const handleDelete = async (it: Evaluator) => {
-    if(!confirm(`Remover o cadastro de ${it.email}? (apenas o documento de perfil)`)) return
-    setLoading(true)
-    try{
-      await deleteDoc(doc(db,'users', it.id))
-      await load()
-    }catch(e:any){
-      setError(e?.message || 'Erro ao excluir')
-      setLoading(false)
-    }
-  }
+  if (loading) return <LinearProgress />
+  if (erro) return <Alert severity="error">{erro}</Alert>
+  if (!project) return <Alert severity="warning">Projeto não encontrado.</Alert>
+  if (!canSee) return <Navigate to="/unauthorized" replace />
 
   return (
-    <Box p={2}>
-      <Stack direction={{ xs:'column', sm:'row' }} gap={2} alignItems={{ xs:'stretch', sm:'center' }} mb={2}>
-        <Typography variant="h5" fontWeight={800}>👥 Avaliadores</Typography>
-        <Stack direction="row" gap={1} flexWrap="wrap">
-          <Button variant="contained" startIcon={<AddIcon/>} onClick={()=>nav('/admin/evaluators/new')}>
-            Novo avaliador
+    <Box>
+      <Typography variant="h5" fontWeight={700} mb={2}>{titulo}</Typography>
+
+      <Stack spacing={2}>
+        {criteria.map((c, idx) => (
+          <Card key={idx} variant="outlined">
+            <CardContent>
+              <Typography fontWeight={600} mb={1}>{c.label}</Typography>
+              <ToggleButtonGroup
+                exclusive
+                value={notas[idx]}
+                onChange={(_, v) => v != null && handlePick(idx, v)}
+              >
+                {c.values.map((v) => (
+                  <ToggleButton
+                    key={`${idx}-${v}`}
+                    value={v}
+                    sx={{
+                      '&.Mui-selected': {
+                        bgcolor: 'success.main',
+                        color: '#fff',
+                        '&:hover': { bgcolor: 'success.dark' },
+                      },
+                    }}
+                  >
+                    {formatScore(v)}
+                  </ToggleButton>
+                ))}
+              </ToggleButtonGroup>
+            </CardContent>
+          </Card>
+        ))}
+
+        <Card variant="outlined">
+          <CardContent>
+            <Typography fontWeight={600} mb={1}>Comentários (opcional)</Typography>
+            <TextField
+              multiline minRows={3} fullWidth
+              value={comentarios}
+              onChange={(e) => setComentarios(e.target.value)}
+            />
+          </CardContent>
+        </Card>
+
+        <Stack direction="row" gap={1} justifyContent="flex-end">
+          <Button variant="outlined" onClick={() => nav(-1)}>Cancelar</Button>
+          <Button variant="contained" color="success" onClick={handleSubmit} disabled={!allFilled}>
+            Salvar avaliação
           </Button>
-          <Button variant="outlined" onClick={load}>Recarregar</Button>
         </Stack>
       </Stack>
-
-      <Stack direction={{ xs:'column', sm:'row' }} gap={2} mb={2} alignItems={{ xs:'stretch', sm:'center' }}>
-        <TextField
-          fullWidth
-          placeholder="Buscar por nome ou email…"
-          value={search}
-          onChange={(e)=>setSearch(e.target.value)}
-        />
-        <FormControlLabel
-          control={<Switch checked={onlyActive} onChange={(_,v)=>setOnlyActive(v)} />}
-          label="Mostrar apenas ativos"
-        />
-      </Stack>
-
-      {loading && <LinearProgress sx={{ mb:2 }}/>}
-      {error && <Alert severity="error" sx={{ mb:2 }}>{error}</Alert>}
-
-      {!filtered.length ? (
-        <Alert severity="info">Nenhum avaliador encontrado.</Alert>
-      ) : (
-        <Stack gap={2}>
-          {filtered.map(it=>(
-            <Card key={it.id} variant="outlined">
-              <CardContent>
-                <Stack direction={{ xs:'column', sm:'row' }} justifyContent="space-between" gap={1}>
-                  <Box flex={1} minWidth={0}>
-                    <Typography variant="subtitle1" fontWeight={700} noWrap>
-                      {it.name || '—'}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary" noWrap>
-                      {it.email} • Role: {it.role} • {it.active === false ? 'Inativo' : 'Ativo'}
-                    </Typography>
-                    {it.categorias?.length ? (
-                      <Stack direction="row" gap={1} flexWrap="wrap" mt={1}>
-                        {it.categorias.map(c=> <Chip key={c} size="small" label={c} />)}
-                      </Stack>
-                    ) : null}
-                  </Box>
-                  <Stack direction="row" alignItems="center" gap={1} sx={{ flexShrink:0 }}>
-                    <Tooltip title={it.active === false ? 'Reativar' : 'Desativar'}>
-                      <IconButton onClick={()=>toggleActive(it)}>
-                        <Switch checked={it.active !== false} />
-                      </IconButton>
-                    </Tooltip>
-                    <Tooltip title="Editar">
-                      <IconButton color="primary" onClick={()=>nav(`/admin/evaluators/${encodeURIComponent(it.id)}/edit`)}>
-                        <EditIcon/>
-                      </IconButton>
-                    </Tooltip>
-                    <Tooltip title="Excluir (apenas perfil)">
-                      <IconButton color="error" onClick={()=>handleDelete(it)}>
-                        <DeleteIcon/>
-                      </IconButton>
-                    </Tooltip>
-                  </Stack>
-                </Stack>
-              </CardContent>
-              <CardActions sx={{ pt:0, justifyContent:'flex-end' }}>
-                <Button size="small" onClick={()=>nav(`/admin/evaluators/${encodeURIComponent(it.id)}/edit`)}>
-                  Abrir no formulário
-                </Button>
-              </CardActions>
-            </Card>
-          ))}
-        </Stack>
-      )}
     </Box>
   )
 }

@@ -1,11 +1,14 @@
 // src/screens/Evaluation/EvaluationScreen.tsx
-import { useEffect, useState, useMemo } from 'react'
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { useNavigate, useParams, useSearchParams, Navigate } from 'react-router-dom'
 import {
   Box, Card, CardContent, Typography, Button,
   TextField, LinearProgress, ToggleButton, ToggleButtonGroup, Stack, Alert
 } from '@mui/material'
-import { doc, getDoc, addDoc, updateDoc, collection, serverTimestamp } from 'firebase/firestore'
+import {
+  doc, getDoc, getDocs, query, where,
+  addDoc, updateDoc, collection, serverTimestamp
+} from 'firebase/firestore'
 import { db } from '@services/firebase'
 import { useAuth } from '@contexts/AuthContext'
 
@@ -13,8 +16,29 @@ import { useAuth } from '@contexts/AuthContext'
 type Criterion = { label: string; values: number[] }
 type Params = { projectId: string }
 
-// ---------- Critérios por categoria (fieis ao edital) ----------
-const CRITERIA_DEFS: Record<string, Criterion[]> = {
+// ====== helpers de normalização ======
+const stripNbsp = (s: string) => (s || '').replace(/\u00A0/g, ' ')
+const normalize = (s: string) =>
+  stripNbsp(String(s || ''))
+    .normalize('NFD')              // separa acentos
+    .replace(/\p{Diacritic}/gu, '')// remove acentos
+    .replace(/\s+/g, ' ')          // colapsa espaços
+    .trim()
+    .toLowerCase()
+
+const CATEGORY_CANON = {
+  'ensino': 'Ensino',
+  'pesquisa/inovacao': 'Pesquisa/Inovação',
+  'pesquisa inovacao': 'Pesquisa/Inovação',
+  'extensao': 'Extensão',
+  'comunicacao oral': 'Comunicação Oral',
+  'iftech': 'IFTECH',
+  'feira de ciencias': 'Feira de Ciências',
+} as const
+type CanonKey = typeof CATEGORY_CANON[keyof typeof CATEGORY_CANON]
+
+// ========= TODOS OS CRITÉRIOS =========
+const CRITERIA_DEFS: Record<CanonKey, Criterion[]> = {
   Ensino: [
     { label: 'Domínio do(a) estudante sobre o trabalho.', values: [0, 0.4, 0.9, 1.4, 1.8] },
     { label: 'Clareza e objetividade da apresentação.', values: [0, 0.4, 0.8, 1.2, 1.6] },
@@ -26,7 +50,6 @@ const CRITERIA_DEFS: Record<string, Criterion[]> = {
     { label: 'Articulação entre ensino, pesquisa e extensão.', values: [0, 0.2, 0.3, 0.4, 0.6] },
     { label: 'Relevância social do projeto.', values: [0, 0.2, 0.3, 0.4, 0.6] },
   ],
-
   'Pesquisa/Inovação': [
     { label: 'Domínio do(a) estudante sobre o trabalho.', values: [0, 0.4, 0.9, 1.4, 1.8] },
     { label: 'Clareza da apresentação.', values: [0, 0.4, 0.8, 1.2, 1.6] },
@@ -38,7 +61,6 @@ const CRITERIA_DEFS: Record<string, Criterion[]> = {
     { label: 'Relevância da pesquisa e/ou inovação em relação à implementação e contribuição direta ou indireta para a sociedade.', values: [0, 0.2, 0.3, 0.4, 0.6] },
     { label: 'Interdisciplinaridade do projeto.', values: [0, 0.2, 0.3, 0.4, 0.6] },
   ],
-
   Extensão: [
     { label: 'Domínio do(a) estudante sobre o trabalho.', values: [0, 0.4, 0.9, 1.4, 1.8] },
     { label: 'Clareza da apresentação.', values: [0, 0.4, 0.8, 1.2, 1.6] },
@@ -50,7 +72,6 @@ const CRITERIA_DEFS: Record<string, Criterion[]> = {
     { label: 'Relação entre os resultados (esperados ou obtidos) e os objetivos do projeto.', values: [0, 0.2, 0.3, 0.4, 0.6] },
     { label: 'Interdisciplinaridade do projeto.', values: [0, 0.2, 0.3, 0.4, 0.6] },
   ],
-
   'Comunicação Oral': [
     { label: 'Domínio do(a) estudante sobre o trabalho considerando a fundamentação teórica.', values: [0, 0.4, 0.9, 1.4, 1.8] },
     { label: 'Clareza e objetividade da apresentação.', values: [0, 0.4, 0.8, 1.2, 1.6] },
@@ -62,7 +83,6 @@ const CRITERIA_DEFS: Record<string, Criterion[]> = {
     { label: 'Relevância do projeto em relação à implementação e contribuição direta ou indireta para a sociedade, para formação integral do estudante e para o processo de ensino e aprendizagem.', values: [0, 0.2, 0.3, 0.4, 0.6] },
     { label: 'Domínio no uso dos recursos audiovisuais.', values: [0, 0.2, 0.3, 0.4, 0.6] },
   ],
-
   IFTECH: [
     { label: 'Os objetivos e os métodos do projeto são bem definidos, de acordo com o tema da feira?', values: [0, 0.25, 0.5, 1.0, 1.5] },
     { label: 'O protótipo e/ou modelo desenvolvido visa solucionar problemas regionais e/ou locais, impactando positivamente na realidade da comunidade?', values: [0, 0.5, 1.0, 1.5, 2.0] },
@@ -71,7 +91,6 @@ const CRITERIA_DEFS: Record<string, Criterion[]> = {
     { label: 'Desempenho do estudante durante a explicação sobre o funcionamento/aplicabilidade do protótipo e/ou modelo inovador', values: [0, 0.25, 0.5, 1.0, 1.5] },
     { label: 'O projeto apresenta protótipo?', values: [0, 0.5, 1.0, 1.5, 2.0] },
   ],
-
   'Feira de Ciências': [
     { label: 'Os objetivos e os métodos do projeto são bem definidos, incluindo diário de bordo e resumo expandido', values: [0, 0.25, 0.5, 1.0, 1.5] },
     { label: 'O projeto possui o objetivo de solucionar problemas regionais e/ou locais, impactando positivamente na realidade da comunidade?', values: [0, 0.5, 1.0, 1.5, 2.0] },
@@ -83,29 +102,25 @@ const CRITERIA_DEFS: Record<string, Criterion[]> = {
 }
 
 // ---------- Helpers ----------
-const formatScore = (v: number) => {
-  // Exibe com até 2 casas sem arredondamentos “enganosos” do edital (0.25, 0.75, etc.)
-  // Mantém 1 casa quando for “.0” ou “.5”; 2 casas quando precisar.
-  const isInt = Number.isInteger(v)
-  if (isInt) return `${v.toFixed(1)}`
-  const frac = Math.abs(v % 1)
-  if (Math.abs(frac - 0.5) < 1e-9) return `${v.toFixed(1)}`
-  return `${v.toFixed(2).replace(/\.?0+$/, '')}`
-}
+const formatScore = (v: number) => v.toFixed(2).replace(/\.?0+$/, '')
 
 export default function EvaluationScreen() {
   const nav = useNavigate()
   const { projectId } = useParams<Params>()
   const [qs] = useSearchParams()
-  const evaluationId = qs.get('evaluationId')
   const titulo = qs.get('titulo') || 'Projeto'
 
-  const { user } = useAuth()
+  const { user, role } = useAuth()
+
   const [loading, setLoading] = useState(true)
+  const [erro, setErro] = useState<string | null>(null)
+
   const [criteria, setCriteria] = useState<Criterion[]>([])
   const [notas, setNotas] = useState<Array<number | null>>([])
   const [comentarios, setComentarios] = useState('')
-  const [erro, setErro] = useState<string | null>(null)
+
+  // Para checar visibilidade sem depender do service
+  const [assigned, setAssigned] = useState<string[] | null>(null)
 
   useEffect(() => {
     let active = true
@@ -114,28 +129,17 @@ export default function EvaluationScreen() {
         setErro(null)
         const s = await getDoc(doc(db, 'trabalhos', projectId!))
         if (!s.exists()) throw new Error('Projeto não encontrado')
-        const categoria = (s.data() as any).categoria as string
-        const defs = CRITERIA_DEFS[categoria]
-        if (!defs) throw new Error(`Categoria inválida ou não suportada pelo edital: ${categoria}`)
+
+        const data = s.data() as any
+        const categoriaRaw = String(data.categoria || '')
+        const canonKey = (CATEGORY_CANON as any)[normalize(categoriaRaw)]
+        const defs = canonKey ? (CRITERIA_DEFS as any)[canonKey] : undefined
+        if (!defs) throw new Error(`Categoria inválida ou não suportada: ${categoriaRaw}`)
+
         if (!active) return
         setCriteria(defs)
-
-        // base para as notas
-        const baseNotas = Array(defs.length).fill(null) as Array<number | null>
-        let baseComent = ''
-
-        if (evaluationId) {
-          const e = await getDoc(doc(db, 'avaliacoes', evaluationId))
-          if (e.exists()) {
-            const data = e.data() as any
-            defs.forEach((_, i) => { baseNotas[i] = data.notas?.[`C${i + 1}`] ?? null })
-            baseComent = data.comentarios || ''
-          }
-        }
-
-        if (!active) return
-        setNotas(baseNotas)
-        setComentarios(baseComent)
+        setNotas(Array(defs.length).fill(null))
+        setAssigned(Array.isArray(data.assignedEvaluators) ? data.assignedEvaluators : ['ALL'])
       } catch (err: any) {
         console.error(err)
         if (active) setErro(err?.message || 'Erro ao carregar dados')
@@ -144,7 +148,15 @@ export default function EvaluationScreen() {
       }
     })()
     return () => { active = false }
-  }, [projectId, evaluationId])
+  }, [projectId])
+
+  const canSee = useMemo(() => {
+    if (!assigned) return false
+    if (role === 'admin') return true
+    if (assigned.includes('ALL')) return true
+    const email = user?.email?.toLowerCase()
+    return email ? assigned.includes(email) : false
+  }, [assigned, role, user])
 
   const handlePick = (idx: number, value: number) => {
     const copy = [...notas]
@@ -156,13 +168,21 @@ export default function EvaluationScreen() {
 
   const handleSubmit = async () => {
     if (!allFilled) {
-      alert('Preencha todos os critérios')
+      alert('Preencha todos os critérios antes de salvar.')
       return
     }
     try {
       setLoading(true)
       const notasObj: Record<string, number> = {}
       notas.forEach((n, i) => (notasObj[`C${i + 1}`] = n!))
+
+      // 1 avaliação por avaliador por projeto
+      const q = query(
+        collection(db, 'avaliacoes'),
+        where('trabalhoId', '==', projectId),
+        where('avaliadorId', '==', user!.uid)
+      )
+      const snap = await getDocs(q)
       const payload = {
         trabalhoId: projectId,
         avaliadorId: user!.uid,
@@ -171,28 +191,28 @@ export default function EvaluationScreen() {
         comentarios,
         timestamp: serverTimestamp(),
       }
-      if (evaluationId) {
-        await updateDoc(doc(db, 'avaliacoes', evaluationId), payload)
+
+      if (!snap.empty) {
+        await updateDoc(doc(db, 'avaliacoes', snap.docs[0].id), payload)
       } else {
         await addDoc(collection(db, 'avaliacoes'), payload)
       }
+
       nav('/evaluator/evaluations')
+    } catch (e:any) {
+      setErro(e?.message || 'Erro ao salvar avaliação')
     } finally {
       setLoading(false)
     }
   }
 
   if (loading) return <LinearProgress />
+  if (erro) return <Alert severity="error">{erro}</Alert>
+  if (!canSee) return <Navigate to="/unauthorized" replace />
 
   return (
-    <Box p={2}>
+    <Box>
       <Typography variant="h5" fontWeight={700} mb={2}>{titulo}</Typography>
-
-      {erro && (
-        <Alert severity="error" sx={{ mb: 2 }}>
-          {erro}
-        </Alert>
-      )}
 
       <Stack spacing={2}>
         {criteria.map((c, idx) => (
@@ -205,7 +225,17 @@ export default function EvaluationScreen() {
                 onChange={(_, v) => v != null && handlePick(idx, v)}
               >
                 {c.values.map((v) => (
-                  <ToggleButton key={`${idx}-${v}`} value={v}>
+                  <ToggleButton
+                    key={`${idx}-${v}`}
+                    value={v}
+                    sx={{
+                      '&.Mui-selected': {
+                        bgcolor: 'success.main',
+                        color: '#fff',
+                        '&:hover': { bgcolor: 'success.dark' },
+                      },
+                    }}
+                  >
                     {formatScore(v)}
                   </ToggleButton>
                 ))}
@@ -227,7 +257,9 @@ export default function EvaluationScreen() {
 
         <Stack direction="row" gap={1} justifyContent="flex-end">
           <Button variant="outlined" onClick={() => nav(-1)}>Cancelar</Button>
-          <Button variant="contained" onClick={handleSubmit} disabled={!allFilled}>Salvar avaliação</Button>
+          <Button variant="contained" color="success" onClick={handleSubmit} disabled={!allFilled}>
+            Salvar avaliação
+          </Button>
         </Stack>
       </Stack>
     </Box>

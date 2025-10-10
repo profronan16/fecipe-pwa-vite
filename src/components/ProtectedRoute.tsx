@@ -1,15 +1,18 @@
 // src/components/ProtectedRoute.tsx
-import { Outlet, Navigate, useLocation } from "react-router-dom";
-import { useAuth } from "@contexts/AuthContext";
+import { Navigate, Outlet, useLocation } from 'react-router-dom'
+import { useAuth } from '@contexts/AuthContext'
 
 export default function ProtectedRoute() {
-  const { user, loading } = useAuth();
-  const location = useLocation();
+  const { user, loading, active } = useAuth()
+  const location = useLocation()
 
-  if (loading) return <div style={{ padding: 24 }}>Carregando...</div>;
+  if (loading) return null
   if (!user) {
-    // envia a rota atual para o login
-    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
+    return <Navigate to="/login" replace state={{ from: location.pathname }} />
   }
-  return <Outlet />;
+  // se a conta estiver desativada, bloqueia tudo
+  if (active === false) {
+    return <Navigate to="/account-disabled" replace />
+  }
+  return <Outlet />
 }

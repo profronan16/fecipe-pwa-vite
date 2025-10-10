@@ -29,7 +29,7 @@ import ReportsScreen from "@screens/Admin/ReportsScreen";
 import GeneralReport from "@screens/Admin/GeneralReport";
 import WinnersReport from "@screens/Admin/WinnersReport";
 import ChartsReport from "@screens/Admin/ChartsReport";
-
+import AccountDisabled from "@screens/Auth/AccountDisabled";
 
 import AppShell from '@components/AppShell'
 
@@ -58,6 +58,8 @@ export default function App() {
       <Route path="/login" element={<LoginScreen />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/unauthorized" element={<Unauthorized />} />
+      <Route path="/account-disabled" element={<AccountDisabled />} />
+
 
       {/* raiz protegida: decide destino */}
       <Route element={<ProtectedRoute />}>
