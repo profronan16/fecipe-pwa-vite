@@ -3,71 +3,149 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   Box, Card, CardContent, Typography, TextField,
   MenuItem, Button, Stack, LinearProgress, Alert,
-  Autocomplete, Chip, FormControlLabel, Switch
+  Autocomplete, Chip, FormControlLabel, Switch, Divider
 } from '@mui/material'
 import { useNavigate, useParams } from 'react-router-dom'
 import { collection, doc as fsDoc } from 'firebase/firestore'
 import { db } from '@services/firebase'
 
 import { listUsers, UserRecord } from '@services/firestore/users'
-import { saveProject, getProject, Project } from '@services/firestore/projects'
+import { saveProject, getProject } from '@services/firestore/projects'
+
+// =================== Constantes de domínio ===================
+
+const CATEGORIAS = [
+  'IFTECH',
+  'Feira de Ciências',
+  'Comunicação Oral',
+  'Banner',
+] as const
+type Categoria = typeof CATEGORIAS[number]
+
+const SUBCATEGORIAS = [
+  'Ensino',
+  'Extensão',
+  'Pesquisa/Inovação',
+] as const
+type Subcategoria = typeof SUBCATEGORIAS[number] | ''
+
+const TIPOS_FEIRA = [
+  'Fundamental',
+  'Ensino Médio',
+  'Superior',
+] as const
+
+const TIPOS_COM_ORAL = [
+  'Ensino Médio',
+  'Superior',
+  'Pós-graduação',
+] as const
+
+const TIPOS_BANNER = [
+  'Ensino Médio',
+  'Superior',
+] as const
+
+const AREA_OPCOES = [
+  'Área', // (mantido a seu pedido)
+  'Ciências Agrárias',
+  'Engenharias',
+  'Inclusão',
+  'Meio Ambiente',
+  'Ciências Biológicas',
+  'Ciências Exatas e da Terra',
+  'Direitos Humanos e Justiça',
+  'Educação',
+  'Linguística, Letras e Artes',
+  'Tecnologia e Produção',
+  'Cultura',
+  'Ciências da Saúde',
+  'Ciências Humanas',
+  'Multidisciplinar',
+  'Feira de Ciências',
+  'Outro',
+] as const
+
+// =================== Form / Types locais ===================
 
 type FormState = {
   titulo: string
-  alunos: string        // input em linha: "nome1; nome2; ..."
-  orientador: string
-  turma: string
-  anoSemestre: string
-  categoria: string
+
+  categoria: Categoria | ''
+  subcategoria: Subcategoria
+  tipo: string // usa listas acima conforme categoria
+
+  area: string
+  areaOutro: string
+
+  apresentador: string
+  autores: string // "autor1; autor2; ..."
 }
 
-const CATEGORIES = [
-  'Ensino',
-  'Pesquisa/Inovação',
-  'Extensão',
-  'Comunicação Oral',
-  'IFTECH',
-  'Feira de Ciências',
-]
+// =================== Helpers ===================
+
+function generateProjectId(): string {
+  return fsDoc(collection(db, 'trabalhos')).id
+}
+
+function normalizeAssigned(input?: string[]): string[] {
+  const raw = Array.isArray(input) ? input : []
+  if (raw.length === 0) return ['ALL']
+  const hasAll = raw.some(s => String(s || '').trim().toUpperCase() === 'ALL')
+  if (hasAll) return ['ALL']
+  const emails = raw.map(s => String(s || '').trim().toLowerCase()).filter(Boolean)
+  return emails.length ? Array.from(new Set(emails)) : ['ALL']
+}
+
+function isAreaInList(area?: string) {
+  return area ? AREA_OPCOES.includes(area as any) : false
+}
+
+// =================== Componente ===================
 
 export default function ProjectForm() {
-  const { id } = useParams<{ id: string }>() // /new (sem id) | /:id/edit (com id)
+  const { id } = useParams<{ id: string }>()
   const isEdit = Boolean(id)
   const nav = useNavigate()
 
-  // --- estado base do formulário ---
   const [form, setForm] = useState<FormState>({
     titulo: '',
-    alunos: '',
-    orientador: '',
-    turma: '',
-    anoSemestre: '',
+
     categoria: '',
+    subcategoria: '',
+    tipo: '',
+
+    area: 'Área',
+    areaOutro: '',
+
+    apresentador: '',
+    autores: '',
   })
 
+  // avaliadores / visibilidade
+  const [allEvaluators, setAllEvaluators] = useState<UserRecord[]>([])
+  const [isPublic, setIsPublic] = useState(true)
+  const [selectedEvaluators, setSelectedEvaluators] = useState<UserRecord[]>([])
+
+  // ui state
   const [loading, setLoading] = useState<boolean>(!!id)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
-  // --- estado dos avaliadores / visibilidade ---
-  const [allEvaluators, setAllEvaluators] = useState<UserRecord[]>([])
-  const [isPublic, setIsPublic] = useState(true) // true => ['ALL']
-  const [selectedEvaluators, setSelectedEvaluators] = useState<UserRecord[]>([])
-
-  // ===== Carregar avaliadores (admin/evaluator) =====
+  // ------- carregar avaliadores -------
   useEffect(() => {
     (async () => {
       try {
         const users = await listUsers()
         const evals = users.filter(u => u.role === 'evaluator' || u.role === 'admin')
         setAllEvaluators(evals)
-      } catch (e) {
-        // silencioso; a UI ainda funciona (apenas sem autocomplete)
+      } catch {
+        // silencioso
       }
     })()
   }, [])
 
-  // ===== Se edição, carregar projeto e preencher o formulário =====
+  // ------- carregar projeto (edição) -------
   useEffect(() => {
     let alive = true
     ;(async () => {
@@ -78,19 +156,39 @@ export default function ProjectForm() {
           if (alive) setMsg({ type: 'error', text: 'Projeto não encontrado' })
           return
         }
-        if (!alive) return
 
+        // mapeia dados existentes para o novo form (mantendo compatibilidade)
+        const autores = Array.isArray(p.autores) ? p.autores.join('; ') : ''
+        const categoria = (p.categoria || '') as Categoria | ''
+        const subcategoria = (p.subcategoria || '') as Subcategoria
+        const tipo = (p.tipo || '')
+        const apresentador = p.apresentador || ''
+
+        // área/areaOutro: se a área salva não está na lista, abrimos como "Outro"
+        let area = p.area || 'Área'
+        let areaOutro = ''
+        if (!isAreaInList(area) && area) {
+          areaOutro = area
+          area = 'Outro'
+        } else if (area === 'Outro') {
+          // se alguém salvou literalmente "Outro", deixar areaOutro vazio
+          areaOutro = ''
+        }
+
+        if (!alive) return
         setForm({
           titulo: p.titulo || '',
-          alunos: Array.isArray(p.alunos) ? p.alunos.join('; ') : '',
-          orientador: p.orientador || '',
-          turma: p.turma || '',
-          anoSemestre: p.anoSemestre || '',
-          categoria: p.categoria || '',
+          categoria,
+          subcategoria,
+          tipo,
+          area,
+          areaOutro,
+          apresentador,
+          autores,
         })
 
         // visibilidade
-        const assigned = p.assignedEvaluators || ['ALL']
+        const assigned = normalizeAssigned(p.assignedEvaluators)
         const pub = assigned.length === 1 && assigned[0] === 'ALL'
         setIsPublic(pub)
         if (!pub) {
@@ -102,75 +200,134 @@ export default function ProjectForm() {
         } else {
           setSelectedEvaluators([])
         }
-      } catch (e: any) {
+      } catch (e:any) {
         if (alive) setMsg({ type: 'error', text: e?.message || 'Erro ao carregar projeto' })
       } finally {
         if (alive) setLoading(false)
       }
     })()
-    return () => {
-      alive = false
-    }
+    return () => { alive = false }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, allEvaluators])
 
-  // ===== Validação simples =====
-  const valid = useMemo(() => {
-    const f = form
-    return Boolean(
-      f.titulo.trim()
-      && f.orientador.trim()
-      && f.turma.trim()
-      && f.anoSemestre.trim()
-      && f.categoria
-    )
-  }, [form])
+  // ------- validação: só título obrigatório -------
+  const valid = useMemo(() => !!form.titulo.trim(), [form.titulo])
 
   const handleChange =
     (key: keyof FormState) =>
       (e: React.ChangeEvent<HTMLInputElement>) =>
         setForm(s => ({ ...s, [key]: e.target.value }))
 
-  // ===== Submit =====
-  const handleSubmit = async () => {
-    if (!valid) {
-      setMsg({ type: 'error', text: 'Preencha todos os campos obrigatórios' })
+  // ------- opções de "tipo" conforme categoria -------
+  const tipoOptions = useMemo(() => {
+    switch (form.categoria) {
+      case 'Feira de Ciências': return TIPOS_FEIRA
+      case 'Comunicação Oral': return TIPOS_COM_ORAL
+      case 'Banner': return TIPOS_BANNER
+      default: return [] // IFTECH não exige tipo
+    }
+  }, [form.categoria])
+
+  // Quando muda a categoria, limpamos subcampo se ficar inválido
+  useEffect(() => {
+    // IFTECH → zera subcategoria e tipo
+    if (form.categoria === 'IFTECH') {
+      setForm(s => ({ ...s, subcategoria: '', tipo: '' }))
       return
     }
-    setSaving(true)
-    setMsg(null)
+
+    // Feira de Ciências → sem subcategoria; tipo deve estar em TIPOS_FEIRA
+    if (form.categoria === 'Feira de Ciências') {
+      setForm(s => ({ ...s, subcategoria: '' }))
+      if (form.tipo && !TIPOS_FEIRA.includes(form.tipo as any)) {
+        setForm(s => ({ ...s, tipo: '' }))
+      }
+      return
+    }
+
+    // Comunicação Oral → usa subcategoria + tipo (médio/superior/pós)
+    if (form.categoria === 'Comunicação Oral') {
+      if (form.tipo && !TIPOS_COM_ORAL.includes(form.tipo as any)) {
+        setForm(s => ({ ...s, tipo: '' }))
+      }
+      return
+    }
+
+    // Banner → usa subcategoria + tipo (médio/superior)
+    if (form.categoria === 'Banner') {
+      if (form.tipo && !TIPOS_BANNER.includes(form.tipo as any)) {
+        setForm(s => ({ ...s, tipo: '' }))
+      }
+      return
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.categoria, form.tipo])
+
+  // ------- salvar -------
+  const handleSubmit = async () => {
+    if (!valid) {
+      setMsg({ type: 'error', text: 'Informe o título do trabalho.' })
+      return
+    }
+    setSaving(true); setMsg(null)
 
     const assigned = isPublic
       ? ['ALL']
       : Array.from(new Set(selectedEvaluators.map(u => u.email.toLowerCase())))
 
-    const payload: Project = {
+    // monta autores a partir da string
+    const autoresArr = form.autores
+      .split(';')
+      .map(s => s.trim())
+      .filter(Boolean)
+
+    // resolve área final (com “Outro”)
+    const areaFinal = form.area === 'Outro'
+      ? (form.areaOutro || 'Outro').trim()
+      : form.area
+
+    // payload **apenas com os novos campos**
+    const payload: any = {
       id: isEdit && id ? id : generateProjectId(),
       titulo: form.titulo.trim(),
-      alunos: form.alunos
-        .split(';')
-        .map(s => s.trim())
-        .filter(Boolean),
-      orientador: form.orientador.trim(),
-      turma: form.turma.trim(),
-      anoSemestre: form.anoSemestre.trim(),
-      categoria: form.categoria,
-      assignedEvaluators: assigned,
+
+      categoria: (form.categoria || '').trim(),          // Banner | Comunicação Oral | IFTECH | Feira de Ciências
+      subcategoria: (form.subcategoria || '').trim(),    // Ensino | Extensão | Pesquisa/Inovação (quando aplicável)
+      tipo: (form.tipo || '').trim(),                    // Fundamental | Ensino Médio | Superior | Pós-graduação (quando aplicável)
+
+      area: areaFinal || '',                             // valor direto ou "Outro" preenchido
+      apresentador: (form.apresentador || '').trim(),
+      autores: autoresArr,
+
+      // visibilidade
+      assignedEvaluators: normalizeAssigned(assigned),
+      updatedAt: new Date(),
     }
 
     try {
-      await saveProject(payload)
+      await saveProject(payload) // service salva apenas campos novos
       setMsg({ type: 'success', text: 'Projeto salvo com sucesso' })
       nav('/admin/projects')
-    } catch (e: any) {
+    } catch (e:any) {
       setMsg({ type: 'error', text: e?.message || 'Erro ao salvar projeto' })
     } finally {
       setSaving(false)
     }
   }
 
+  // ------- UI -------
+  const showSubcategoria =
+    form.categoria === 'Comunicação Oral' || form.categoria === 'Banner'
+
+  const showTipo =
+    form.categoria === 'Comunicação Oral' ||
+    form.categoria === 'Banner' ||
+    form.categoria === 'Feira de Ciências'
+
+  const showAreaOutro = form.area === 'Outro'
+
   return (
-    <Box maxWidth={760} mx="auto">
+    <Box maxWidth={860} mx="auto">
       <Stack
         direction={{ xs: 'column', sm: 'row' }}
         alignItems={{ xs: 'flex-start', sm: 'center' }}
@@ -195,60 +352,98 @@ export default function ProjectForm() {
         <CardContent>
           <Stack spacing={2}>
             <TextField
-              label="Título"
+              label="Título do trabalho"
               value={form.titulo}
               onChange={handleChange('titulo')}
               required
               fullWidth
             />
 
+            <Stack direction={{ xs: 'column', md: 'row' }} gap={2}>
+              <TextField
+                select
+                label="Categoria"
+                value={form.categoria}
+                onChange={handleChange('categoria')}
+                fullWidth
+              >
+                <MenuItem value="">— (opcional) —</MenuItem>
+                {CATEGORIAS.map((c) => (
+                  <MenuItem key={c} value={c}>{c}</MenuItem>
+                ))}
+              </TextField>
+
+              {showSubcategoria && (
+                <TextField
+                  select
+                  label="Subcategoria"
+                  value={form.subcategoria}
+                  onChange={handleChange('subcategoria')}
+                  fullWidth
+                >
+                  <MenuItem value="">— (opcional) —</MenuItem>
+                  {SUBCATEGORIAS.map((c) => (
+                    <MenuItem key={c} value={c}>{c}</MenuItem>
+                  ))}
+                </TextField>
+              )}
+
+              {showTipo && (
+                <TextField
+                  select
+                  label="Tipo"
+                  value={form.tipo}
+                  onChange={handleChange('tipo')}
+                  fullWidth
+                >
+                  <MenuItem value="">— (opcional) —</MenuItem>
+                  {tipoOptions.map((t) => (
+                    <MenuItem key={t} value={t}>{t}</MenuItem>
+                  ))}
+                </TextField>
+              )}
+            </Stack>
+
+            <Divider flexItem />
+
+            <Stack direction={{ xs: 'column', md: 'row' }} gap={2}>
+              <TextField
+                select
+                label="Área"
+                value={form.area}
+                onChange={handleChange('area')}
+                fullWidth
+              >
+                {AREA_OPCOES.map((a) => (
+                  <MenuItem key={a} value={a}>{a}</MenuItem>
+                ))}
+              </TextField>
+
+              {showAreaOutro && (
+                <TextField
+                  label="Área (Outro)"
+                  value={form.areaOutro}
+                  onChange={handleChange('areaOutro')}
+                  fullWidth
+                />
+              )}
+            </Stack>
+
             <TextField
-              label='Alunos (separados por ";")'
-              value={form.alunos}
-              onChange={handleChange('alunos')}
+              label="Apresentador(a)"
+              value={form.apresentador}
+              onChange={handleChange('apresentador')}
+              fullWidth
+            />
+
+            <TextField
+              label='Autores (separe com ";")'
+              value={form.autores}
+              onChange={handleChange('autores')}
               fullWidth
               multiline
               minRows={2}
             />
-
-            <TextField
-              label="Orientador"
-              value={form.orientador}
-              onChange={handleChange('orientador')}
-              required
-              fullWidth
-            />
-
-            <Stack direction={{ xs: 'column', sm: 'row' }} gap={2}>
-              <TextField
-                label="Turma"
-                value={form.turma}
-                onChange={handleChange('turma')}
-                required
-                fullWidth
-              />
-              <TextField
-                label="Ano/Semestre"
-                value={form.anoSemestre}
-                onChange={handleChange('anoSemestre')}
-                required
-                fullWidth
-              />
-            </Stack>
-
-            <TextField
-              select
-              label="Categoria"
-              value={form.categoria}
-              onChange={handleChange('categoria')}
-              required
-              fullWidth
-            >
-              <MenuItem value="">Selecione...</MenuItem>
-              {CATEGORIES.map((c) => (
-                <MenuItem key={c} value={c}>{c}</MenuItem>
-              ))}
-            </TextField>
 
             {/* Visibilidade */}
             <FormControlLabel
@@ -287,15 +482,11 @@ export default function ProjectForm() {
                 )}
               />
             )}
+
           </Stack>
         </CardContent>
       </Card>
     </Box>
   )
 }
-
-/** Gera um id de projeto quando criando novo (usa Firestore para manter padrão) */
-function generateProjectId(): string {
-  // cria uma referência vazia para obter um id consistente com o Firestore
-  return fsDoc(collection(db, 'trabalhos')).id
-}
+// =================== Fim do componente ===================

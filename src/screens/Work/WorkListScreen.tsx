@@ -4,7 +4,7 @@ import {
   Box, TextField, ToggleButtonGroup, ToggleButton,
   FormControl, InputLabel, Select, MenuItem,
   Card, CardContent, CardActions, Button, Typography,
-  LinearProgress, Alert, Stack, Checkbox, FormControlLabel
+  LinearProgress, Alert, Stack, Checkbox, FormControlLabel, Chip
 } from '@mui/material'
 import { collection, getDocs, query, where } from 'firebase/firestore'
 import { db } from '@services/firebase'
@@ -12,8 +12,35 @@ import { useAuth } from '@contexts/AuthContext'
 import { useNavigate } from 'react-router-dom'
 import { listProjectsForEvaluator, Project } from '@services/firestore/projects'
 
+// ===== Domínio (coerente com o restante do app) =====
+const CATEGORIAS = ['IFTECH', 'Feira de Ciências', 'Comunicação Oral', 'Banner'] as const
+type Categoria = typeof CATEGORIAS[number] | 'Todos'
+
+const SUBCATEGORIAS = ['Ensino', 'Extensão', 'Pesquisa/Inovação'] as const
+type Subcategoria = typeof SUBCATEGORIAS[number] | ''
+
+const TIPOS_FEIRA   = ['Fundamental', 'Ensino Médio', 'Superior'] as const
+const TIPOS_COMORAL = ['Ensino Médio', 'Superior', 'Pós-graduação'] as const
+const TIPOS_BANNER  = ['Ensino Médio', 'Superior'] as const
+type Tipo = '' | 'Fundamental' | 'Ensino Médio' | 'Superior' | 'Pós-graduação'
+
+function optionsTipoFor(categoria: Categoria): readonly string[] {
+  if (categoria === 'Feira de Ciências') return TIPOS_FEIRA
+  if (categoria === 'Comunicação Oral') return TIPOS_COMORAL
+  if (categoria === 'Banner') return TIPOS_BANNER
+  return []
+}
+
+const normalize = (s: string) =>
+  String(s ?? '')
+    .replace(/\u00A0/g, ' ')
+    .trim()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLowerCase()
+
 export default function WorkListScreen() {
-  const { user } = useAuth()
+  const { user, role } = useAuth()
   const nav = useNavigate()
 
   const [loading, setLoading] = useState(false)
@@ -24,8 +51,11 @@ export default function WorkListScreen() {
   const [hideEvaluated, setHideEvaluated] = useState(true)
 
   // filtros
-  const [categories, setCategories] = useState<string[]>(['Todos'])
-  const [selectedCategory, setSelectedCategory] = useState<string>('Todos')
+  const [categories, setCategories] = useState<Categoria[]>(['Todos'])
+  const [selectedCategory, setSelectedCategory] = useState<Categoria>('Todos')
+  const [selectedSub, setSelectedSub] = useState<Subcategoria>('')
+  const [selectedTipo, setSelectedTipo] = useState<Tipo>('')
+
   const [searchTerm, setSearchTerm] = useState('')
   const [mode, setMode] = useState<'titulo' | 'autor'>('titulo')
 
@@ -34,59 +64,84 @@ export default function WorkListScreen() {
     setLoading(true)
     setError(null)
     try {
-      // 1) Carrega projetos visíveis ao avaliador
+      // 1) Projetos visíveis ao avaliador (ou todos, se admin)
       const emailLower = user.email.toLowerCase()
-      const data = await listProjectsForEvaluator(emailLower)
+      const data = await listProjectsForEvaluator(emailLower, role)
       setProjects(data)
 
-      // 2) Carrega avaliações já feitas por este avaliador (para marcar/ocultar)
+      // 2) Avaliações já feitas por este avaliador (para marcar/ocultar)
       const evalSnap = await getDocs(
         query(collection(db, 'avaliacoes'), where('avaliadorId', '==', user.uid))
       )
       const done = new Set<string>(evalSnap.docs.map(d => (d.data() as any).trabalhoId))
       setEvaluatedIds(done)
 
-      // 3) Gera lista de categorias (a partir dos projetos visíveis)
-      const cats = Array.from(new Set(data.map(p => p.categoria || 'Sem categoria'))).sort()
+      // 3) Lista de categorias baseada nos projetos visíveis
+      const cats = Array.from(
+        new Set(
+          data.map(p => (p.categoria && CATEGORIAS.includes(p.categoria as any) ? p.categoria : 'Sem categoria'))
+        )
+      ).sort() as Categoria[]
       setCategories(['Todos', ...cats])
     } catch (e: any) {
       setError(e?.message || 'Erro ao carregar trabalhos')
     } finally {
       setLoading(false)
     }
-  }, [user])
+  }, [user, role])
 
   useEffect(() => { load() }, [load])
 
-  const filtered = useMemo(() => {
-    let list = projects
+  // opções de tipo baseadas na categoria escolhida
+  const tipoOptions = useMemo(() => optionsTipoFor(selectedCategory), [selectedCategory])
 
+  const filtered = useMemo(() => {
+    let list = [...projects]
+
+    // ocultar já avaliados
     if (hideEvaluated) {
       list = list.filter(p => !evaluatedIds.has(p.id))
     }
 
+    // categoria
     if (selectedCategory !== 'Todos') {
-      list = list.filter(p => (p.categoria || 'Sem categoria') === selectedCategory)
+      list = list.filter(p => (p.categoria || '') === selectedCategory)
     }
 
+    // subcategoria (apenas se categoria for Com. Oral ou Banner)
+    if ((selectedCategory === 'Comunicação Oral' || selectedCategory === 'Banner') && selectedSub) {
+      list = list.filter(p => (p.subcategoria || '') === selectedSub)
+    }
+
+    // tipo (apenas se categoria for Feira/Com. Oral/Banner)
+    if (
+      (selectedCategory === 'Feira de Ciências' ||
+        selectedCategory === 'Comunicação Oral' ||
+        selectedCategory === 'Banner') &&
+      selectedTipo
+    ) {
+      list = list.filter(p => (p.tipo || '') === selectedTipo)
+    }
+
+    // busca por título ou autor
     if (searchTerm.trim()) {
-      const t = searchTerm.toLowerCase()
+      const t = normalize(searchTerm)
       list = list.filter(p =>
         mode === 'titulo'
-          ? (p.titulo || '').toLowerCase().includes(t)
-          : (Array.isArray(p.alunos) ? p.alunos : []).some(a => (a || '').toLowerCase().includes(t))
+          ? normalize(p.titulo || '').includes(t)
+          : (Array.isArray(p.autores) ? p.autores : []).some(a => normalize(a).includes(t))
       )
     }
 
     return list
-  }, [projects, evaluatedIds, hideEvaluated, selectedCategory, searchTerm, mode])
+  }, [projects, evaluatedIds, hideEvaluated, selectedCategory, selectedSub, selectedTipo, searchTerm, mode])
 
   if (loading) return <LinearProgress />
   if (error) return <Alert severity="error">{error}</Alert>
 
   return (
     <Box>
-      <Stack direction={{ xs: 'column', sm: 'row' }} gap={2} mb={2} alignItems={{ xs: 'stretch', sm: 'center' }}>
+      <Stack direction={{ xs: 'column', md: 'row' }} gap={2} mb={2} alignItems={{ xs: 'stretch', md: 'center' }}>
         <TextField
           fullWidth
           placeholder={mode === 'titulo' ? 'Buscar por título...' : 'Buscar por autor...'}
@@ -101,16 +156,50 @@ export default function WorkListScreen() {
           <ToggleButton value="titulo">Título</ToggleButton>
           <ToggleButton value="autor">Autor</ToggleButton>
         </ToggleButtonGroup>
+
         <FormControl sx={{ minWidth: 200 }}>
           <InputLabel>Categoria</InputLabel>
           <Select
             label="Categoria"
             value={selectedCategory}
-            onChange={e => setSelectedCategory(e.target.value)}
+            onChange={e => {
+              const v = e.target.value as Categoria
+              setSelectedCategory(v)
+              setSelectedSub('')
+              setSelectedTipo('')
+            }}
           >
             {categories.map(c => (<MenuItem key={c} value={c}>{c}</MenuItem>))}
           </Select>
         </FormControl>
+
+        {(selectedCategory === 'Comunicação Oral' || selectedCategory === 'Banner') && (
+          <FormControl sx={{ minWidth: 200 }}>
+            <InputLabel>Subcategoria</InputLabel>
+            <Select
+              label="Subcategoria"
+              value={selectedSub}
+              onChange={e => setSelectedSub(e.target.value as Subcategoria)}
+            >
+              <MenuItem value="">Todas</MenuItem>
+              {SUBCATEGORIAS.map(s => (<MenuItem key={s} value={s}>{s}</MenuItem>))}
+            </Select>
+          </FormControl>
+        )}
+
+        {(selectedCategory === 'Feira de Ciências' || selectedCategory === 'Comunicação Oral' || selectedCategory === 'Banner') && (
+          <FormControl sx={{ minWidth: 200 }}>
+            <InputLabel>Tipo</InputLabel>
+            <Select
+              label="Tipo"
+              value={selectedTipo}
+              onChange={e => setSelectedTipo(e.target.value as Tipo)}
+            >
+              <MenuItem value="">Todos</MenuItem>
+              {tipoOptions.map(t => (<MenuItem key={t} value={t}>{t}</MenuItem>))}
+            </Select>
+          </FormControl>
+        )}
       </Stack>
 
       <FormControlLabel
@@ -125,21 +214,36 @@ export default function WorkListScreen() {
         <Stack gap={2}>
           {filtered.map(item => {
             const already = evaluatedIds.has(item.id)
+            const isAll = (item.assignedEvaluators?.length === 1 && item.assignedEvaluators[0] === 'ALL') || !item.assignedEvaluators?.length
             return (
               <Card key={item.id} variant="outlined" sx={{ opacity: already ? 0.7 : 1 }}>
                 <CardContent>
-                  <Typography variant="subtitle1" fontWeight={700}>{item.titulo}</Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    {(item.categoria || '—')} • {(item.turma || '—')}
-                  </Typography>
-                  {!!item.alunos?.length && (
-                    <Typography variant="body2">Autores: {item.alunos.join(', ')}</Typography>
-                  )}
-                  {!item.assignedEvaluators || item.assignedEvaluators.includes('ALL') ? (
-                    <Typography variant="caption" color="text.secondary">Visível a todos os avaliadores</Typography>
-                  ) : (
-                    <Typography variant="caption" color="text.secondary">Restrito a avaliadores vinculados</Typography>
-                  )}
+                  <Stack spacing={0.75}>
+                    <Typography variant="subtitle1" fontWeight={700}>{item.titulo || 'Sem título'}</Typography>
+
+                    <Stack direction="row" gap={1} flexWrap="wrap">
+                      {item.categoria && <Chip size="small" label={item.categoria} />}
+                      {item.subcategoria && <Chip size="small" label={item.subcategoria} />}
+                      {item.tipo && <Chip size="small" label={item.tipo} />}
+                      {item.area && <Chip size="small" label={item.area} />}
+                    </Stack>
+
+                    {item.apresentador && (
+                      <Typography variant="body2" color="text.secondary">
+                        <strong>Apresentador(a):</strong> {item.apresentador}
+                      </Typography>
+                    )}
+
+                    {!!item.autores?.length && (
+                      <Typography variant="body2" color="text.secondary">
+                        <strong>Autores:</strong> {item.autores.join('; ')}
+                      </Typography>
+                    )}
+
+                    <Typography variant="caption" color="text.secondary">
+                      {isAll ? 'Visível a todos os avaliadores' : 'Restrito a avaliadores vinculados'}
+                    </Typography>
+                  </Stack>
                 </CardContent>
                 <CardActions sx={{ justifyContent: 'flex-end' }}>
                   <Button

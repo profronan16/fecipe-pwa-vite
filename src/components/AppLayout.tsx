@@ -16,10 +16,11 @@ import LogoutIcon from '@mui/icons-material/Logout'
 import FolderIcon from '@mui/icons-material/Folder'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '@contexts/AuthContext'
+import { DeleteForever } from '@mui/icons-material'
 
 const DRAWER_WIDTH = 240
 
-type MenuItem = { label: string; to: string; icon: JSX.Element }
+type MenuItem = { label: string; to: string; icon: JSX.Element; adminOnly?: boolean }
 
 export default function AppLayout({ children }: PropsWithChildren) {
   const { user, role, logout } = useAuth()
@@ -45,6 +46,7 @@ export default function AppLayout({ children }: PropsWithChildren) {
     { label: 'Importação em lote', to: '/admin/projects/bulk', icon: <CloudUploadIcon /> },
     { label: 'Avaliadores', to: '/admin/evaluators', icon: <GroupIcon /> },
     { label: 'Relatórios', to: '/admin/reports', icon: <AssessmentIcon /> },
+    { label: 'Manutenção', to: '/admin/maintenance', icon: <DeleteForever />, adminOnly: true },
   ]
 
   const items = role === 'admin' ? adminItems : evaluatorItems
