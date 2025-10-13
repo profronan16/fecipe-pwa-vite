@@ -1,274 +1,208 @@
 // src/screens/Admin/AdminDashboard.tsx
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
-    Box, Grid, Card, CardContent, Typography, Chip, Button,
-    Dialog, DialogTitle, DialogContent, DialogActions, Divider, Stack, LinearProgress, Alert
+  Box, Grid, Card, CardContent, Typography, Stack, Chip,
+  CircularProgress, Divider, IconButton, TextField, InputAdornment, Button
 } from '@mui/material'
-import { collection, getDocs } from 'firebase/firestore'
-import { db } from '@services/firebase'
+import SearchIcon from '@mui/icons-material/Search'
+import RefreshIcon from '@mui/icons-material/Refresh'
 import { useNavigate } from 'react-router-dom'
-import RecomputeButton from '@components/RecomputeButton'
-
-// Pesos/constante conforme app mobile (Dashboard/Reports)
-const WEIGHTS = [0.9, 0.8, 0.7, 0.6, 0.6, 0.4, 0.4, 0.3, 0.3] // 9 critérios padrão
-const Z = 2.5
+import { listProjects } from '@services/firestore/projects'
+import { getWorkAggregate, getTopEvaluatorsForWork, getUserNames } from '@services/firestore/aggregates'
 
 type Project = {
-    id: string
-    titulo: string
-    categoria: string
-    turma?: string
-    orientador?: string
-}
-type Evaluation = {
-    trabalhoId: string
-    avaliadorId?: string
-    evaluatorEmail?: string
-    notas: Record<string, number>
-}
-
-type ProjectDetail = {
-    id: string
-    titulo: string
-    categoria: string
-    turma?: string
-    orientador?: string
-    evaluations: Array<{ email: string; total: number }>
-    finalScore: number
+  id: string
+  titulo: string
+  categoria?: string
+  subcategoria?: string
+  tipo?: string
+  area?: string
 }
 
 export default function AdminDashboard() {
-    const nav = useNavigate()
+  const [loading, setLoading] = useState(true)
+  const [projects, setProjects] = useState<Project[]>([])
+  const [nfMap, setNfMap] = useState<Record<string, number>>({})
+  const [topEvalMap, setTopEvalMap] = useState<Record<string, Array<{ name: string; total: number }>>>({})
+  const [q, setQ] = useState('')
+  const nav = useNavigate()
 
-    const [loading, setLoading] = useState(true)
-    const [error, setError] = useState<string | null>(null)
-    const [evaluatorsCount, setEvaluatorsCount] = useState(0)
-    const [projectsCount, setProjectsCount] = useState(0)
-    const [perCategory, setPerCategory] = useState<Record<string, number>>({})
-    const [top3ByCategory, setTop3ByCategory] = useState<Record<string, ProjectDetail[]>>({})
-    const [selectedCat, setSelectedCat] = useState<string>('Todos')
-    const [detail, setDetail] = useState<ProjectDetail | null>(null)
-
-    const categories = useMemo(
-        () => ['Todos', ...Object.keys(perCategory)],
-        [perCategory]
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase()
+    if (!s) return projects
+    return projects.filter(p =>
+      (p.titulo || '').toLowerCase().includes(s) ||
+      (p.categoria || '').toLowerCase().includes(s) ||
+      (p.subcategoria || '').toLowerCase().includes(s) ||
+      (p.tipo || '').toLowerCase().includes(s) ||
+      (p.area || '').toLowerCase().includes(s)
     )
+  }, [q, projects])
 
-    const computeFinalScore = (project: Project, evals: Evaluation[]) => {
-        if (!evals.length) return 0
-        const k = (project.categoria === 'IFTECH' || project.categoria === 'Robótica') ? 6 : 9
-        // monta arrays de notas por critério (C1..Ck)
-        const perCriterion: number[][] = Array.from({ length: k }, () => [])
-        evals.forEach(e => {
-            for (let i = 1; i <= k; i++) {
-                const key = `C${i}`
-                perCriterion[i - 1].push(e.notas?.[key] ?? 0)
-            }
-        })
-        // normaliza e aplica pesos para cada avaliação
-        const scoresPerEval = Array(evals.length).fill(0)
-        for (let i = 0; i < k; i++) {
-            const arr = perCriterion[i]
-            const mean = arr.reduce((a, b) => a + b, 0) / (arr.length || 1)
-            const sd =
-                Math.sqrt(arr.map(v => (v - mean) ** 2).reduce((a, b) => a + b, 0) / (arr.length || 1)) || 1
-            arr.forEach((v, idx) => {
-                const norm = (v - mean) / sd + Z
-                const w = WEIGHTS[i] ?? 1
-                scoresPerEval[idx] += norm * w
-            })
+  const totals = useMemo(() => ({
+    projetos: projects.length,
+    avaliados: Object.values(nfMap).filter(v => Number.isFinite(v)).length,
+    categorias: new Set(projects.map(p => p.categoria || '')).size,
+  }), [projects, nfMap])
+
+  // Carrega projetos + agregados
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      setLoading(true)
+      try {
+        const list = await listProjects()
+        if (!alive) return
+        setProjects(list as any)
+
+        const nfTemp: Record<string, number> = {}
+        const topTemp: Record<string, Array<{ name: string; total: number }>> = {}
+
+        for (const p of list) {
+          const agg = await getWorkAggregate(p.id)
+          if (agg?.nf != null) nfTemp[p.id] = agg.nf
+
+          const top3 = await getTopEvaluatorsForWork(p.id, 3)
+          const names = await getUserNames(top3.map(t => t.uid))
+          topTemp[p.id] = top3.map(t => ({
+            name: names[t.uid] || t.uid,
+            total: Number(t.total.toFixed(2)),
+          }))
         }
-        return scoresPerEval.reduce((a, b) => a + b, 0) / scoresPerEval.length
+        if (!alive) return
+        setNfMap(nfTemp)
+        setTopEvalMap(topTemp)
+      } finally {
+        if (alive) setLoading(false)
+      }
+    })()
+    return () => { alive = false }
+  }, [])
+
+  const handleRefresh = async () => {
+    setLoading(true)
+    const nfTemp: Record<string, number> = {}
+    const topTemp: Record<string, Array<{ name: string; total: number }>> = {}
+    for (const p of projects) {
+      const agg = await getWorkAggregate(p.id)
+      if (agg?.nf != null) nfTemp[p.id] = agg.nf
+      const top3 = await getTopEvaluatorsForWork(p.id, 3)
+      const names = await getUserNames(top3.map(t => t.uid))
+      topTemp[p.id] = top3.map(t => ({
+        name: names[t.uid] || t.uid,
+        total: Number(t.total.toFixed(2)),
+      }))
     }
+    setNfMap(nfTemp)
+    setTopEvalMap(topTemp)
+    setLoading(false)
+  }
 
-    const load = useCallback(async () => {
-        setLoading(true); setError(null)
-        try {
-            // users (conta avaliadores/admin)
-            const usersSnap = await getDocs(collection(db, 'users'))
-            const evalsCount = usersSnap.docs.filter(d => {
-                const r = (d.data() as any).role
-                return r === 'evaluator' || r === 'admin' || !r
-            }).length
-            setEvaluatorsCount(evalsCount)
+  if (loading) {
+    return <Stack alignItems="center" py={6}><CircularProgress /></Stack>
+  }
 
-            // projetos
-            const projSnap = await getDocs(collection(db, 'trabalhos'))
-            const projects: Project[] = projSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }))
-            setProjectsCount(projects.length)
+  return (
+    <Box>
+      <Stack direction="row" alignItems="center" justifyContent="space-between" mb={2} gap={2} flexWrap="wrap">
+        <Typography variant="h5" fontWeight={800}>Dashboard (Admin)</Typography>
+        <Stack direction="row" gap={1}>
+          <TextField
+            size="small"
+            placeholder="Buscar por título, categoria, área…"
+            value={q}
+            onChange={e => setQ(e.target.value)}
+            InputProps={{
+              startAdornment: (<InputAdornment position="start"><SearchIcon /></InputAdornment>)
+            }}
+          />
+          <IconButton onClick={handleRefresh} title="Recarregar">
+            <RefreshIcon />
+          </IconButton>
+          <Button onClick={() => nav('/reports')} variant="outlined">Relatórios</Button>
+        </Stack>
+      </Stack>
 
-            // distribuição por categoria
-            const byCat: Record<string, number> = {}
-            projects.forEach(p => { byCat[p.categoria] = (byCat[p.categoria] || 0) + 1 })
-            setPerCategory(byCat)
+      {/* KPIs */}
+      <Grid container spacing={2} mb={2}>
+        <Grid item xs={12} sm={4}>
+          <Card><CardContent sx={{ p: 3 }}>
+            <Typography variant="overline" color="text.secondary">Projetos</Typography>
+            <Typography variant="h4" fontWeight={800}>{totals.projetos}</Typography>
+          </CardContent></Card>
+        </Grid>
+        <Grid item xs={12} sm={4}>
+          <Card><CardContent sx={{ p: 3 }}>
+            <Typography variant="overline" color="text.secondary">Com Nota Final</Typography>
+            <Typography variant="h4" fontWeight={800}>{totals.avaliados}</Typography>
+          </CardContent></Card>
+        </Grid>
+        <Grid item xs={12} sm={4}>
+          <Card><CardContent sx={{ p: 3 }}>
+            <Typography variant="overline" color="text.secondary">Categorias</Typography>
+            <Typography variant="h4" fontWeight={800}>{totals.categorias}</Typography>
+          </CardContent></Card>
+        </Grid>
+      </Grid>
 
-            // avaliações (uma vez)
-            const evalSnap = await getDocs(collection(db, 'avaliacoes'))
-            const allEvals: Evaluation[] = evalSnap.docs.map(d => (d.data() as any))
+      {/* Cards de projetos (mesmo estilo da tela Projetos) */}
+      <Grid container spacing={2}>
+        {filtered.map((p) => {
+          const nf = nfMap[p.id]
+          const top = topEvalMap[p.id] || []
+          return (
+            <Grid item xs={12} sm={6} md={4} key={p.id}>
+              <Card variant="outlined" sx={{ height: '100%' }}>
+                <CardContent sx={{ p: 3 }}>
+                  <Stack spacing={1}>
+                    <Typography variant="h6" fontWeight={700} gutterBottom>
+                      {p.titulo || '(sem título)'}
+                    </Typography>
 
-            // Top 3 por categoria (com padding de até 3 avaliadores)
-            const top: Record<string, ProjectDetail[]> = {}
-            for (const cat of Object.keys(byCat)) {
-                const projs = projects.filter(p => p.categoria === cat)
-                const details: ProjectDetail[] = projs.map(p => {
-                    const eForProj = allEvals.filter(e => e.trabalhoId === p.id)
-                    const evaluations = eForProj
-                        .map(e => {
-                            const total = Object.values<number>(e.notas || {}).reduce((a, b) => a + b, 0)
-                            return { email: e.evaluatorEmail || e.avaliadorId || 'Sem avaliador', total }
-                        })
-                        .sort((a, b) => b.total - a.total)
-                        .slice(0, 3)
+                    <Stack direction="row" gap={1} flexWrap="wrap">
+                      {p.categoria && <Chip size="small" label={`Categoria: ${p.categoria}`} />}
+                      {p.subcategoria && <Chip size="small" label={p.subcategoria} />}
+                      {p.tipo && <Chip size="small" label={p.tipo} />}
+                      {p.area && <Chip size="small" label={p.area} />}
+                    </Stack>
 
-                    while (evaluations.length < 3) evaluations.push({ email: 'Sem avaliador', total: 0 })
+                    <Typography variant="body1" sx={{ mt: 1 }}>
+                      <strong>Nota Final:</strong> {nf != null ? nf.toFixed(2) : '—'}
+                    </Typography>
 
-                    return {
-                        id: p.id,
-                        titulo: p.titulo,
-                        categoria: cat,
-                        turma: p.turma,
-                        orientador: p.orientador,
-                        evaluations,
-                        finalScore: computeFinalScore(p, eForProj),
-                    }
-                })
-                top[cat] = details.sort((a, b) => b.finalScore - a.finalScore).slice(0, 3)
-            }
-            setTop3ByCategory(top)
-        } catch (e: any) {
-            setError(e?.message || 'Erro ao carregar painel')
-        } finally {
-            setLoading(false)
-        }
-    }, [])
+                    <Divider />
 
-    useEffect(() => { load() }, [load])
-
-    return (
-        <>
-            <Stack
-                direction={{ xs: 'column', sm: 'row' }}
-                alignItems={{ xs: 'flex-start', sm: 'center' }}
-                justifyContent="space-between"
-                spacing={2}
-                sx={{ mb: 2 }}
-            >
-                <Typography variant="h5" fontWeight={800}>📊 Painel do Administrador</Typography>
-
-                <Stack direction="row" gap={1} flexWrap="wrap">
-                    <Button variant="outlined" onClick={load}>Recarregar</Button>
-                    <RecomputeButton />
-                    <Button variant="contained" onClick={() => nav('/admin/projects')}>Projetos</Button>
-                    <Button variant="contained" onClick={() => nav('/admin/evaluators')}>Avaliadores</Button>
-                    <Button variant="contained" onClick={() => nav('/admin/reports')}>Relatórios</Button>
-                </Stack>
-            </Stack>
-
-            {loading && <LinearProgress />}
-            {error && <Alert severity="error" sx={{ my: 2 }}>{error}</Alert>}
-
-            <Grid container spacing={2} sx={{ mb: 2 }} justifyContent="center">
-                <Grid item xs={12} sm={6} md={4}>
-                    <Card sx={{ height: '100%' }}>
-                        <CardContent>
-                            <Typography variant="subtitle2" color="text.secondary">Avaliadores</Typography>
-                            <Typography variant="h4" fontWeight={800}>{evaluatorsCount}</Typography>
-                        </CardContent></Card>
-                </Grid>
-                <Grid item xs={12} sm={6} md={4}>
-                    <Card sx={{ height: '100%' }}>
-
-                        <CardContent>
-                            <Typography variant="subtitle2" color="text.secondary">Projetos</Typography>
-                            <Typography variant="h4" fontWeight={800}>{projectsCount}</Typography>
-                        </CardContent></Card>
-                </Grid>
-                <Grid item xs={12} sm={6} md={4}>
-                    <Card sx={{ height: '100%' }}>
-
-                        <CardContent>
-                            <Typography variant="subtitle2" color="text.secondary" gutterBottom>Distribuição por Categoria</Typography>
-                            <Stack direction="row" gap={1} flexWrap="wrap">
-                                {Object.entries(perCategory).map(([cat, n]) => (
-                                    <Chip key={cat} label={`${cat}: ${n}`} />
-                                ))}
-                                {!Object.keys(perCategory).length && <Typography variant="body2">Sem dados</Typography>}
-                            </Stack>
-                        </CardContent></Card>
-                </Grid>
-            </Grid>
-
-            <Divider sx={{ my: 3 }} />
-
-            <Stack direction="row" gap={1} flexWrap="wrap" mb={1}>
-                {categories.map(cat => (
-                    <Chip
-                        key={cat}
-                        color={selectedCat === cat ? 'primary' : 'default'}
-                        label={cat}
-                        onClick={() => setSelectedCat(cat)}
-                    />
-                ))}
-            </Stack>
-
-            {(selectedCat === 'Todos' ? Object.keys(top3ByCategory) : [selectedCat]).map(cat => (
-                <Box key={cat} sx={{ mb: 2 }}>
-                    <Typography variant="h6" fontWeight={700} gutterBottom>Top 3 — {cat}</Typography>
-                    <Grid container spacing={2}>
-                        {top3ByCategory[cat]?.map((pd) => (
-                            <Grid item xs={12} md={4} key={pd.id}>
-                                <Card
-                                    onClick={() => setDetail(pd)}
-                                    sx={{ cursor: 'pointer', '&:hover': { boxShadow: 6 } }}
-                                >
-                                    <CardContent>
-                                        <Typography variant="subtitle1" fontWeight={700} noWrap>{pd.titulo}</Typography>
-                                        <Typography variant="body2" color="text.secondary">
-                                            Turma: {pd.turma || '—'} • Orientador: {pd.orientador || '—'}
-                                        </Typography>
-                                        <Typography variant="body2" sx={{ mt: 1 }}>
-                                            Nota Final: <b>{pd.finalScore.toFixed(2)}</b>
-                                        </Typography>
-                                        <Typography variant="caption" color="text.secondary">
-                                            Avaliadores: {pd.evaluations.map(e => e.email).join(', ')}
-                                        </Typography>
-                                    </CardContent>
-                                </Card>
-                            </Grid>
-                        ))}
-                        {!top3ByCategory[cat]?.length && (
-                            <Grid item xs={12}><Alert severity="info">Sem projetos nesta categoria.</Alert></Grid>
+                    <Box>
+                      <Typography variant="body2" color="text.secondary" fontWeight={700}>
+                        Avaliadores (top 3 pelo total):
+                      </Typography>
+                      <Stack spacing={0.5} mt={0.5}>
+                        {top.length === 0 && (
+                          <Typography variant="body2" color="text.secondary">—</Typography>
                         )}
-                    </Grid>
-                </Box>
-            ))}
+                        {top.map((t, idx) => (
+                          <Typography key={idx} variant="body2">
+                            {idx + 1}. {t.name} — Total: {t.total.toFixed(2)}
+                          </Typography>
+                        ))}
+                      </Stack>
+                    </Box>
 
-            <Dialog open={!!detail} onClose={() => setDetail(null)} fullWidth maxWidth="sm">
-                <DialogTitle>Detalhes do Projeto</DialogTitle>
-                <DialogContent dividers>
-                    {detail && (
-                        <Stack spacing={1}>
-                            <Typography variant="h6">{detail.titulo}</Typography>
-                            <Typography variant="body2">Categoria: {detail.categoria}</Typography>
-                            <Typography variant="body2">Turma: {detail.turma || '—'}</Typography>
-                            <Typography variant="body2">Orientador: {detail.orientador || '—'}</Typography>
-                            <Divider sx={{ my: 1 }} />
-                            <Typography variant="subtitle2">Avaliadores (top 3 pelo total):</Typography>
-                            {detail.evaluations.map((e, i) => (
-                                <Typography key={i} variant="body2">
-                                    {i + 1}. {e.email} — Total: {e.total.toFixed(2)}
-                                </Typography>
-                            ))}
-                            <Divider sx={{ my: 1 }} />
-                            <Typography variant="body2">Nota Final: <b>{detail.finalScore.toFixed(2)}</b></Typography>
-                        </Stack>
-                    )}
-                </DialogContent>
-                <DialogActions>
-                    <Button onClick={() => setDetail(null)}>Fechar</Button>
-                    <Button variant="contained" onClick={() => { setDetail(null) }}>Ok</Button>
-                </DialogActions>
-            </Dialog>
-        </>
-    )
+                    <Stack direction="row" gap={1} pt={1}>
+                      <Button size="small" variant="outlined" onClick={() => nav(`/admin/projects/edit/${p.id}`)}>
+                        Editar
+                      </Button>
+                      <Button size="small" variant="contained" onClick={() => nav(`/reports/project/${p.id}`)}>
+                        Ver relatório
+                      </Button>
+                    </Stack>
+                  </Stack>
+                </CardContent>
+              </Card>
+            </Grid>
+          )
+        })}
+      </Grid>
+    </Box>
+  )
 }

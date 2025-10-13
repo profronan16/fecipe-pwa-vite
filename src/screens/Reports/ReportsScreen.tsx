@@ -9,6 +9,7 @@ import TableChartIcon from '@mui/icons-material/TableChart'
 
 import WinnersReport from './WinnersReport'
 import GeneralReport from './GeneralReport'
+import RecomputeButton from '@components/RecomputeButton'
 
 type TabDef = {
   value: 'winners' | 'general'
@@ -41,6 +42,7 @@ export default function ReportsScreen() {
     <Box>
       <Stack direction={{ xs: 'column', md: 'row' }} alignItems={{ xs: 'flex-start', md: 'center' }} justifyContent="space-between" gap={2} mb={2}>
         <Typography variant="h5" fontWeight={800}>Relatórios</Typography>
+        <RecomputeButton />
       </Stack>
 
       <Card variant="outlined" sx={{ mb: 2 }}>

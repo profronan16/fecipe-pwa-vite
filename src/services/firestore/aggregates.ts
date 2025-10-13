@@ -1,7 +1,7 @@
 // src/services/firestore/aggregates.ts
 import { db } from '@services/firebase'
 import {
-  doc, getDoc, collection, query, where, getDocs, DocumentData,
+  doc, getDoc, collection, query, where, getDocs, limit as qLimit, DocumentData,
 } from 'firebase/firestore'
 
 export type WorkAggregate = {
@@ -27,14 +27,22 @@ export async function getWorkAggregate(workId: string): Promise<WorkAggregate | 
 }
 
 /**
- * Retorna o top 3 de avaliadores de um trabalho, com soma simples das notas
- * (total = somatório de scores do documento de avaliação).
- * Se quiser outro critério de "top", ajuste aqui.
+ * Soma simples dos critérios no doc de avaliação (scores/notas).
  */
-export async function getTopEvaluatorsForWork(workId: string, limit = 3): Promise<Array<{
-  uid: string
-  total: number
-}>> {
+function sumScores(scores: Record<string, unknown> | undefined): number {
+  if (!scores) return 0
+  let total = 0
+  for (const v of Object.values(scores)) {
+    const n = typeof v === 'number' ? v : parseFloat(String(v).replace(',', '.'))
+    if (Number.isFinite(n)) total += n
+  }
+  return total
+}
+
+/**
+ * Top N avaliadores (por soma de notas no trabalho).
+ */
+export async function getTopEvaluatorsForWork(workId: string, topN = 3): Promise<Array<{ uid: string; total: number }>> {
   const q = query(collection(db, 'avaliacoes'), where('trabalhoId', '==', workId))
   const snap = await getDocs(q)
 
@@ -42,33 +50,51 @@ export async function getTopEvaluatorsForWork(workId: string, limit = 3): Promis
   for (const d of snap.docs) {
     const data = d.data() as any
     const uid = String(data.avaliadorId || '')
-    const scores: Record<string, unknown> = data.scores ?? data.notas ?? {}
-    let total = 0
-    for (const v of Object.values(scores)) {
-      const n = typeof v === 'number' ? v : parseFloat(String(v).replace(',', '.'))
-      if (Number.isFinite(n)) total += n
-    }
-    if (uid) arr.push({ uid, total })
+    if (!uid) continue
+    const total = sumScores((data.scores ?? data.notas) as Record<string, unknown>)
+    arr.push({ uid, total })
   }
   arr.sort((a, b) => b.total - a.total)
-  return arr.slice(0, limit)
+  return arr.slice(0, topN)
 }
 
-/** Resolve nomes dos usuários a partir dos UIDs. */
+/**
+ * Resolve nome do usuário para um único UID:
+ * - tenta users/{uid}
+ * - senão, busca users where uid == uid (doc com ID = e-mail, p.ex.)
+ */
+async function resolveUserName(uid: string): Promise<string> {
+  // 1) doc(users/{uid})
+  const byId = await getDoc(doc(db, 'users', uid))
+  if (byId.exists()) {
+    const d = byId.data() as any
+    return d.displayName || d.name || d.nome || d.email || uid
+  }
+
+  // 2) query(users, where('uid','==', uid))
+  const qUid = query(collection(db, 'users'), where('uid', '==', uid), qLimit(1))
+  const snapUid = await getDocs(qUid)
+  if (!snapUid.empty) {
+    const d = snapUid.docs[0].data() as any
+    return d.displayName || d.name || d.nome || d.email || uid
+  }
+
+  // 3) fallback
+  return uid
+}
+
+/**
+ * Resolve nomes para um array de UIDs. Faz busca individual resiliente
+ * (evita limite do "in" e suporta docId != uid).
+ */
 export async function getUserNames(uids: string[]): Promise<Record<string, string>> {
-  if (!uids.length) return {}
-  // Se sua coleção for 'users' com docId === uid:
-  const map: Record<string, string> = {}
-  // Otimização simples: buscar 1 a 1 (pode trocar por 'in' quando fizer índices por lotes de 10)
-  await Promise.all(uids.map(async (uid) => {
-    const ref = doc(db, 'users', uid)
-    const snap = await getDoc(ref)
-    if (snap.exists()) {
-      const d = snap.data() as any
-      map[uid] = d.displayName || d.name || d.nome || d.email || uid
-    } else {
-      map[uid] = uid
-    }
-  }))
-  return map
+  const out: Record<string, string> = {}
+  // elimina duplicados
+  const unique = Array.from(new Set(uids.filter(Boolean)))
+  await Promise.all(
+    unique.map(async (u) => {
+      out[u] = await resolveUserName(u)
+    })
+  )
+  return out
 }

@@ -1,11 +1,11 @@
 // src/screens/Reports/GeneralReport.tsx
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Box, Card, CardContent, Typography, Stack, TextField, MenuItem,
-  LinearProgress, Alert, Table, TableHead, TableRow, TableCell, TableBody, Chip
+  Box, Typography, Stack, TextField, MenuItem, Button,
+  Table, TableHead, TableRow, TableCell, TableBody, Paper, CircularProgress
 } from '@mui/material'
-import { collection, getDocs } from 'firebase/firestore'
-import { db } from '@services/firebase'
+import { listProjects } from '@services/firestore/projects'
+import { getWorkAggregate } from '@services/firestore/aggregates'
 
 type Project = {
   id: string
@@ -14,59 +14,52 @@ type Project = {
   subcategoria?: string
   tipo?: string
   area?: string
-  apresentador?: string
-  autores?: string[]
-  score?: number // se você já salva nota/score consolidado
-}
-
-const CATEGORIAS = ['IFTECH', 'Feira de Ciências', 'Comunicação Oral', 'Banner'] as const
-const SUBCATEGORIAS = ['Ensino', 'Extensão', 'Pesquisa/Inovação'] as const
-
-// >>> Atualizado: inclui "Servidor" nas categorias corretas
-const TIPOS_FEIRA   = ['Fundamental', 'Ensino Médio', 'Superior'] as const
-const TIPOS_COMORAL = ['Ensino Médio', 'Superior', 'Pós-graduação', 'Servidor'] as const
-const TIPOS_BANNER  = ['Ensino Médio', 'Superior', 'Servidor'] as const
-
-function tipoOptions(categoria: string) {
-  if (categoria === 'Feira de Ciências') return TIPOS_FEIRA
-  if (categoria === 'Comunicação Oral') return TIPOS_COMORAL
-  if (categoria === 'Banner') return TIPOS_BANNER
-  return []
 }
 
 export default function GeneralReport() {
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [rows, setRows] = useState<Project[]>([])
+  const [projects, setProjects] = useState<Project[]>([])
+  const [nfMap, setNfMap] = useState<Record<string, number>>({})
+  const [cat, setCat] = useState<string>('')           // filtro categoria
+  const [sub, setSub] = useState<string>('')           // filtro subcategoria
+  const [tipo, setTipo] = useState<string>('')         // filtro tipo
+  const [q, setQ] = useState('')                       // busca
 
-  const [cat, setCat] = useState<string>('')
-  const [sub, setSub] = useState<string>('')
-  const [tipo, setTipo] = useState<string>('')
+  const cats = useMemo(() => Array.from(new Set(projects.map(p => p.categoria).filter(Boolean))) as string[], [projects])
+  const subs = useMemo(() => {
+    const base = projects.filter(p => !cat || p.categoria === cat)
+    return Array.from(new Set(base.map(p => p.subcategoria).filter(Boolean))) as string[]
+  }, [projects, cat])
+  const tipos = useMemo(() => {
+    const base = projects.filter(p => (!cat || p.categoria === cat) && (!sub || p.subcategoria === sub))
+    return Array.from(new Set(base.map(p => p.tipo).filter(Boolean))) as string[]
+  }, [projects, cat, sub])
+
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase()
+    return projects
+      .filter(p => (!cat || p.categoria === cat) && (!sub || p.subcategoria === sub) && (!tipo || p.tipo === tipo))
+      .filter(p => !s || (p.titulo || '').toLowerCase().includes(s))
+      .map(p => ({ ...p, nf: nfMap[p.id] ?? -Infinity }))
+      .sort((a, b) => (b.nf - a.nf))
+  }, [projects, nfMap, cat, sub, tipo, q])
 
   useEffect(() => {
     let alive = true
     ;(async () => {
+      setLoading(true)
       try {
-        setLoading(true); setError(null)
-        const snap = await getDocs(collection(db, 'trabalhos'))
-        const list: Project[] = snap.docs.map(d => {
-          const data = d.data() as any
-          return {
-            id: d.id,
-            titulo: data.titulo || '',
-            categoria: data.categoria || '',
-            subcategoria: data.subcategoria || '',
-            tipo: data.tipo || '',
-            area: data.area || '',
-            apresentador: data.apresentador || '',
-            autores: Array.isArray(data.autores) ? data.autores : [],
-            score: data.score || undefined, // opcional
-          }
-        })
+        const list = await listProjects()
         if (!alive) return
-        setRows(list)
-      } catch (e:any) {
-        if (alive) setError(e?.message || 'Erro ao carregar')
+        setProjects(list as any)
+
+        const nf: Record<string, number> = {}
+        for (const p of list) {
+          const agg = await getWorkAggregate(p.id)
+          if (agg?.nf != null) nf[p.id] = agg.nf
+        }
+        if (!alive) return
+        setNfMap(nf)
       } finally {
         if (alive) setLoading(false)
       }
@@ -74,113 +67,72 @@ export default function GeneralReport() {
     return () => { alive = false }
   }, [])
 
-  const tiposDisponiveis = useMemo(() => tipoOptions(cat), [cat])
+  const exportCSV = () => {
+    const headers = ['Titulo', 'Categoria', 'Subcategoria', 'Tipo', 'NF']
+    const rows = filtered.map(p => [
+      `"${(p.titulo || '').replace(/"/g, '""')}"`,
+      `"${(p.categoria || '').replace(/"/g, '""')}"`,
+      `"${(p.subcategoria || '').replace(/"/g, '""')}"`,
+      `"${(p.tipo || '').replace(/"/g, '""')}"`,
+      (Number.isFinite(p.nf) ? p.nf.toFixed(4) : '')
+    ])
+    const csv = [headers.join(';'), ...rows.map(r => r.join(';'))].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'relatorio_geral.csv'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
 
-  const filtered = useMemo(() => {
-    let list = [...rows]
-    if (cat) list = list.filter(r => (r.categoria || '') === cat)
-    if (sub && (cat === 'Comunicação Oral' || cat === 'Banner')) {
-      list = list.filter(r => (r.subcategoria || '') === sub)
-    }
-    if (tipo && (cat === 'Feira de Ciências' || cat === 'Comunicação Oral' || cat === 'Banner')) {
-      list = list.filter(r => (r.tipo || '') === tipo)
-    }
-    // ordena por score desc (se houver), fallback título
-    list.sort((a,b) => {
-      if (a.score != null && b.score != null) return (b.score - a.score)
-      return (a.titulo || '').localeCompare(b.titulo || '')
-    })
-    return list
-  }, [rows, cat, sub, tipo])
+  if (loading) return <Stack alignItems="center" py={6}><CircularProgress /></Stack>
 
   return (
     <Box>
-      <Typography variant="h6" fontWeight={800} mb={2}>Relatório Geral</Typography>
+      <Typography variant="h5" fontWeight={800} gutterBottom>Relatório Geral (por Nota Final)</Typography>
 
-      <Stack direction={{ xs: 'column', md: 'row' }} gap={2} mb={2}>
-        <TextField
-          select
-          label="Categoria"
-          value={cat}
-          onChange={(e)=>{ setCat(e.target.value); setSub(''); setTipo('') }}
-          sx={{ minWidth: 220 }}
-        >
+      <Stack direction="row" gap={2} mb={2} flexWrap="wrap">
+        <TextField select size="small" label="Categoria" value={cat} onChange={e => { setCat(e.target.value); setSub(''); setTipo('') }}>
           <MenuItem value="">Todas</MenuItem>
-          {CATEGORIAS.map(c => <MenuItem key={c} value={c}>{c}</MenuItem>)}
+          {cats.map(c => <MenuItem key={c} value={c}>{c}</MenuItem>)}
         </TextField>
-
-        {(cat === 'Comunicação Oral' || cat === 'Banner') && (
-          <TextField
-            select
-            label="Subcategoria"
-            value={sub}
-            onChange={(e)=>setSub(e.target.value)}
-            sx={{ minWidth: 220 }}
-          >
-            <MenuItem value="">Todas</MenuItem>
-            {SUBCATEGORIAS.map(s => <MenuItem key={s} value={s}>{s}</MenuItem>)}
-          </TextField>
-        )}
-
-        {(cat === 'Feira de Ciências' || cat === 'Comunicação Oral' || cat === 'Banner') && (
-          <TextField
-            select
-            label="Tipo"
-            value={tipo}
-            onChange={(e)=>setTipo(e.target.value)}
-            sx={{ minWidth: 220 }}
-          >
-            <MenuItem value="">Todos</MenuItem>
-            {tiposDisponiveis.map(t => <MenuItem key={t} value={t}>{t}</MenuItem>)}
-          </TextField>
-        )}
+        <TextField select size="small" label="Subcategoria" value={sub} onChange={e => { setSub(e.target.value); setTipo('') }} disabled={!cat}>
+          <MenuItem value="">Todas</MenuItem>
+          {subs.map(s => <MenuItem key={s} value={s}>{s}</MenuItem>)}
+        </TextField>
+        <TextField select size="small" label="Tipo" value={tipo} onChange={e => setTipo(e.target.value)} disabled={!cat}>
+          <MenuItem value="">Todos</MenuItem>
+          {tipos.map(t => <MenuItem key={t} value={t}>{t}</MenuItem>)}
+        </TextField>
+        <TextField size="small" label="Busca por título" value={q} onChange={e => setQ(e.target.value)} />
+        <Button onClick={exportCSV} variant="outlined">Exportar CSV</Button>
       </Stack>
 
-      {loading && <LinearProgress sx={{ mb: 2 }} />}
-      {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-
-      <Card variant="outlined">
-        <CardContent>
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>#</TableCell>
-                <TableCell>Título</TableCell>
-                <TableCell>Categoria</TableCell>
-                <TableCell>Subcategoria</TableCell>
-                <TableCell>Tipo</TableCell>
-                <TableCell>Área</TableCell>
-                <TableCell>Apresentador</TableCell>
-                <TableCell>Autores</TableCell>
-                <TableCell>Score</TableCell>
+      <Paper variant="outlined">
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>Título</TableCell>
+              <TableCell>Categoria</TableCell>
+              <TableCell>Subcategoria</TableCell>
+              <TableCell>Tipo</TableCell>
+              <TableCell align="right">Nota Final</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {filtered.map(p => (
+              <TableRow key={p.id} hover>
+                <TableCell>{p.titulo}</TableCell>
+                <TableCell>{p.categoria}</TableCell>
+                <TableCell>{p.subcategoria}</TableCell>
+                <TableCell>{p.tipo}</TableCell>
+                <TableCell align="right">{Number.isFinite(p.nf) ? p.nf.toFixed(4) : '—'}</TableCell>
               </TableRow>
-            </TableHead>
-            <TableBody>
-              {filtered.map((r, idx) => (
-                <TableRow key={r.id}>
-                  <TableCell>{idx + 1}</TableCell>
-                  <TableCell>{r.titulo}</TableCell>
-                  <TableCell>{r.categoria}</TableCell>
-                  <TableCell>{r.subcategoria}</TableCell>
-                  <TableCell>{r.tipo}</TableCell>
-                  <TableCell>{r.area}</TableCell>
-                  <TableCell>{r.apresentador}</TableCell>
-                  <TableCell>{(r.autores || []).join('; ')}</TableCell>
-                  <TableCell>{r.score != null ? r.score.toFixed(3) : '-'}</TableCell>
-                </TableRow>
-              ))}
-              {!filtered.length && !loading && (
-                <TableRow>
-                  <TableCell colSpan={9}>
-                    <Alert severity="info">Nenhum registro para os filtros atuais.</Alert>
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+            ))}
+          </TableBody>
+        </Table>
+      </Paper>
     </Box>
   )
 }
-  
