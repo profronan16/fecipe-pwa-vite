@@ -12,17 +12,17 @@ import { useAuth } from '@contexts/AuthContext'
 import { useNavigate } from 'react-router-dom'
 import { listProjectsForEvaluator, Project } from '@services/firestore/projects'
 
-// ===== Domínio (coerente com o restante do app) =====
 const CATEGORIAS = ['IFTECH', 'Feira de Ciências', 'Comunicação Oral', 'Banner'] as const
 type Categoria = typeof CATEGORIAS[number] | 'Todos'
 
 const SUBCATEGORIAS = ['Ensino', 'Extensão', 'Pesquisa/Inovação'] as const
 type Subcategoria = typeof SUBCATEGORIAS[number] | ''
 
-const TIPOS_FEIRA   = ['Fundamental', 'Ensino Médio', 'Superior'] as const
-const TIPOS_COMORAL = ['Ensino Médio', 'Superior', 'Pós-graduação'] as const
-const TIPOS_BANNER  = ['Ensino Médio', 'Superior'] as const
-type Tipo = '' | 'Fundamental' | 'Ensino Médio' | 'Superior' | 'Pós-graduação'
+// >>> Atualizado: inclui "Servidor" nas categorias corretas
+const TIPOS_FEIRA = ['Fundamental', 'Ensino Médio', 'Superior'] as const
+const TIPOS_COMORAL = ['Ensino Médio', 'Superior', 'Pós-graduação', 'Servidor'] as const
+const TIPOS_BANNER = ['Ensino Médio', 'Superior', 'Servidor'] as const
+type Tipo = '' | 'Fundamental' | 'Ensino Médio' | 'Superior' | 'Pós-graduação' | 'Servidor'
 
 function optionsTipoFor(categoria: Categoria): readonly string[] {
   if (categoria === 'Feira de Ciências') return TIPOS_FEIRA
@@ -50,7 +50,6 @@ export default function WorkListScreen() {
   const [evaluatedIds, setEvaluatedIds] = useState<Set<string>>(new Set())
   const [hideEvaluated, setHideEvaluated] = useState(true)
 
-  // filtros
   const [categories, setCategories] = useState<Categoria[]>(['Todos'])
   const [selectedCategory, setSelectedCategory] = useState<Categoria>('Todos')
   const [selectedSub, setSelectedSub] = useState<Subcategoria>('')
@@ -64,19 +63,16 @@ export default function WorkListScreen() {
     setLoading(true)
     setError(null)
     try {
-      // 1) Projetos visíveis ao avaliador (ou todos, se admin)
       const emailLower = user.email.toLowerCase()
       const data = await listProjectsForEvaluator(emailLower, role)
       setProjects(data)
 
-      // 2) Avaliações já feitas por este avaliador (para marcar/ocultar)
       const evalSnap = await getDocs(
         query(collection(db, 'avaliacoes'), where('avaliadorId', '==', user.uid))
       )
       const done = new Set<string>(evalSnap.docs.map(d => (d.data() as any).trabalhoId))
       setEvaluatedIds(done)
 
-      // 3) Lista de categorias baseada nos projetos visíveis
       const cats = Array.from(
         new Set(
           data.map(p => (p.categoria && CATEGORIAS.includes(p.categoria as any) ? p.categoria : 'Sem categoria'))
@@ -92,28 +88,23 @@ export default function WorkListScreen() {
 
   useEffect(() => { load() }, [load])
 
-  // opções de tipo baseadas na categoria escolhida
   const tipoOptions = useMemo(() => optionsTipoFor(selectedCategory), [selectedCategory])
 
   const filtered = useMemo(() => {
     let list = [...projects]
 
-    // ocultar já avaliados
     if (hideEvaluated) {
       list = list.filter(p => !evaluatedIds.has(p.id))
     }
 
-    // categoria
     if (selectedCategory !== 'Todos') {
       list = list.filter(p => (p.categoria || '') === selectedCategory)
     }
 
-    // subcategoria (apenas se categoria for Com. Oral ou Banner)
     if ((selectedCategory === 'Comunicação Oral' || selectedCategory === 'Banner') && selectedSub) {
       list = list.filter(p => (p.subcategoria || '') === selectedSub)
     }
 
-    // tipo (apenas se categoria for Feira/Com. Oral/Banner)
     if (
       (selectedCategory === 'Feira de Ciências' ||
         selectedCategory === 'Comunicação Oral' ||
@@ -123,7 +114,6 @@ export default function WorkListScreen() {
       list = list.filter(p => (p.tipo || '') === selectedTipo)
     }
 
-    // busca por título ou autor
     if (searchTerm.trim()) {
       const t = normalize(searchTerm)
       list = list.filter(p =>
@@ -182,7 +172,7 @@ export default function WorkListScreen() {
               onChange={e => setSelectedSub(e.target.value as Subcategoria)}
             >
               <MenuItem value="">Todas</MenuItem>
-              {SUBCATEGORIAS.map(s => (<MenuItem key={s} value={s}>{s}</MenuItem>))}
+              {['Ensino', 'Extensão', 'Pesquisa/Inovação'].map(s => (<MenuItem key={s} value={s}>{s}</MenuItem>))}
             </Select>
           </FormControl>
         )}
@@ -248,9 +238,11 @@ export default function WorkListScreen() {
                 <CardActions sx={{ justifyContent: 'flex-end' }}>
                   <Button
                     variant="contained"
-                    onClick={() => nav(`/evaluator/evaluate/${item.id}?titulo=${encodeURIComponent(item.titulo || 'Projeto')}`)}
+                    onClick={() =>
+                      nav(`/evaluator/evaluate/${item.id}?titulo=${encodeURIComponent(item.titulo || '')}`)
+                    }
                   >
-                    {already ? 'Rever Avaliação' : 'Avaliar'}
+                    {already ? 'Reabrir avaliação' : 'Avaliar'}
                   </Button>
                 </CardActions>
               </Card>

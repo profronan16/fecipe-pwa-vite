@@ -17,9 +17,14 @@ type Categoria = typeof CATEGORIAS[number]
 const SUBCATEGORIAS = ['Ensino', 'Extensão', 'Pesquisa/Inovação'] as const
 type Subcategoria = typeof SUBCATEGORIAS[number] | ''
 
-const TIPOS_FEIRA = ['Fundamental', 'Ensino Médio', 'Superior'] as const
-const TIPOS_COM_ORAL = ['Ensino Médio', 'Superior', 'Pós-graduação'] as const
-const TIPOS_BANNER = ['Ensino Médio', 'Superior'] as const
+// Regras finais:
+// - IFTECH           → sem tipo
+// - Feira de Ciências→ Fundamental | Ensino Médio | Superior (sem Servidor)
+// - Comunicação Oral → Ensino Médio | Superior | Pós-graduação | Servidor
+// - Banner           → Ensino Médio | Superior | Servidor
+const TIPOS_FEIRA     = ['Fundamental', 'Ensino Médio', 'Superior'] as const
+const TIPOS_COM_ORAL  = ['Ensino Médio', 'Superior', 'Pós-graduação', 'Servidor'] as const
+const TIPOS_BANNER    = ['Ensino Médio', 'Superior', 'Servidor'] as const
 
 // =================== Normalização ===================
 
@@ -48,6 +53,7 @@ function normTipoFeira(s: string) {
   if (v === 'fundamental') return 'Fundamental'
   if (v === 'ensino medio' || v === 'ensino médio' || v === 'medio' || v === 'médio') return 'Ensino Médio'
   if (v === 'superior') return 'Superior'
+  // Feira NÃO aceita Servidor
   return ''
 }
 
@@ -55,7 +61,8 @@ function normTipoComOral(s: string) {
   const v = clean(s).toLowerCase()
   if (v === 'ensino medio' || v === 'ensino médio' || v === 'medio' || v === 'médio') return 'Ensino Médio'
   if (v === 'superior') return 'Superior'
-  if (v === 'pos-graduacao' || v === 'pós-graduação' || v === 'pos' || v === 'pós') return 'Pós-graduação'
+  if (v === 'pos-graduacao' || v === 'pós-graduação' || v === 'pos' || v === 'pós' || v === 'pos graduacao' || v === 'pos-graduação') return 'Pós-graduação'
+  if (v === 'servidor') return 'Servidor'
   return ''
 }
 
@@ -63,6 +70,7 @@ function normTipoBanner(s: string) {
   const v = clean(s).toLowerCase()
   if (v === 'ensino medio' || v === 'ensino médio' || v === 'medio' || v === 'médio') return 'Ensino Médio'
   if (v === 'superior') return 'Superior'
+  if (v === 'servidor') return 'Servidor'
   return ''
 }
 
@@ -117,7 +125,9 @@ const CSV_HEADER = [
   'area', 'areaOutro', 'apresentador', 'autores', 'avaliadores'
 ]
 
+// inclui linhas com “Servidor” em Com. Oral e Banner
 const CSV_EXAMPLE_ROWS: CsvRow[] = [
+  // IFTECH
   {
     titulo: 'Protótipo de irrigação automatizada',
     categoria: 'IFTECH',
@@ -129,6 +139,7 @@ const CSV_EXAMPLE_ROWS: CsvRow[] = [
     autores: 'Ana Santos; Bruno Silva',
     avaliadores: '' // vazio = ALL
   },
+  // Feira (sem Servidor)
   {
     titulo: 'Ciências na escola: experiências simples',
     categoria: 'Feira de Ciências',
@@ -140,22 +151,24 @@ const CSV_EXAMPLE_ROWS: CsvRow[] = [
     autores: 'Carlos Pereira; Denise Alves',
     avaliadores: 'prof1@ifpr.edu.br; prof2@ifpr.edu.br'
   },
+  // Comunicação Oral com Servidor
   {
-    titulo: 'Oficina de leitura crítica',
+    titulo: 'Oficina de leitura crítica (Servidor)',
     categoria: 'Comunicação Oral',
     subcategoria: 'Ensino',
-    tipo: 'Superior',
+    tipo: 'Servidor',
     area: 'Linguística, Letras e Artes',
     areaOutro: '',
     apresentador: 'Elisa Rocha',
     autores: 'Elisa Rocha',
     avaliadores: ''
   },
+  // Banner com Servidor
   {
-    titulo: 'Aplicativo para coleta seletiva',
+    titulo: 'Aplicativo para coleta seletiva (Servidor)',
     categoria: 'Banner',
     subcategoria: 'Extensão',
-    tipo: 'Ensino Médio',
+    tipo: 'Servidor',
     area: 'Meio Ambiente',
     areaOutro: '',
     apresentador: 'Fabio Nogueira',
@@ -191,7 +204,7 @@ function prepareRow(raw: CsvRow, index: number): PreparedRow {
   const subcategoria = normSubcategoria(raw.subcategoria || '')
   let tipo = clean(raw.tipo)
 
-  // normalizar tipo conforme categoria
+  // normalizar tipo conforme categoria (com Servidor apenas onde permitido)
   if (categoria === 'Feira de Ciências') {
     tipo = normTipoFeira(tipo) || ''
   } else if (categoria === 'Comunicação Oral') {
@@ -225,19 +238,19 @@ function prepareRow(raw: CsvRow, index: number): PreparedRow {
   // Regras de combinação:
   // IFTECH → sem subcategoria/tipo obrigatórios
   // Feira de Ciências → exige tipo (Fundamental / Ensino Médio / Superior); ignora subcategoria
-  // Comunicação Oral → exige subcategoria (Ensino/Extensão/Pesquisa/Inovação) e tipo (Médio/Superior/Pós)
-  // Banner → exige subcategoria (Ensino/Extensão/Pesquisa/Inovação) e tipo (Médio/Superior)
+  // Comunicação Oral → exige subcategoria (Ensino/Extensão/Pesquisa/Inovação) e tipo (Médio/Superior/Pós-graduação/Servidor)
+  // Banner → exige subcategoria (Ensino/Extensão/Pesquisa/Inovação) e tipo (Médio/Superior/Servidor)
   if (!categoria) {
-    // categoria opcional, mas se vier preenchida precisa ser válida
-    // (se quiser exigir categoria, basta transformar em erro)
+    // categoria opcional; se quiser torná-la obrigatória, transforme em erro aqui.
   } else if (categoria === 'Feira de Ciências') {
     if (!tipo) errors.push('Feira de Ciências requer "tipo" (Fundamental/Ensino Médio/Superior).')
+    // se vier “Servidor” por engano, normTipoFeira já terá zerado
   } else if (categoria === 'Comunicação Oral') {
     if (!subcategoria) errors.push('Comunicação Oral requer "subcategoria" (Ensino/Extensão/Pesquisa/Inovação).')
-    if (!tipo) errors.push('Comunicação Oral requer "tipo" (Ensino Médio/Superior/Pós-graduação).')
+    if (!tipo) errors.push('Comunicação Oral requer "tipo" (Ensino Médio/Superior/Pós-graduação/Servidor).')
   } else if (categoria === 'Banner') {
     if (!subcategoria) errors.push('Banner requer "subcategoria" (Ensino/Extensão/Pesquisa/Inovação).')
-    if (!tipo) errors.push('Banner requer "tipo" (Ensino Médio/Superior).')
+    if (!tipo) errors.push('Banner requer "tipo" (Ensino Médio/Superior/Servidor).')
   }
 
   return {
@@ -453,7 +466,7 @@ export default function BulkUploadScreen() {
 
       {!rows.length && (
         <Alert severity="info">
-          Use o botão <strong>“Selecionar arquivo CSV”</strong> para carregar os projetos.  
+          Use o botão <strong>“Selecionar arquivo CSV”</strong> para carregar os projetos.&nbsp;
           Você pode baixar um <MLink component="button" onClick={handleDownloadTemplate}>modelo de CSV</MLink> para preencher.
         </Alert>
       )}

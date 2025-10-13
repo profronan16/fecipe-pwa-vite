@@ -74,7 +74,7 @@ export default function App() {
               <Route path="/evaluator" element={<EvaluatorDashboard />} />
               <Route path="/evaluator/works" element={<WorkListScreen />} />
               <Route path="/evaluator/evaluations" element={<EvaluationsList />} />
-              <Route path="/evaluator/evaluate/:projectId" element={<EvaluationScreen />} />
+              <Route path="/evaluator/evaluate/:id" element={<EvaluationScreen />} />
               <Route path="/evaluator/profile" element={<ProfileScreen />} />
               <Route path="/evaluator/reset-password" element={<ResetPasswordScreen />} />
 

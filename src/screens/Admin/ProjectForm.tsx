@@ -35,19 +35,23 @@ const TIPOS_FEIRA = [
   'Superior',
 ] as const
 
+// >>> Atualizado com "Servidor"
 const TIPOS_COM_ORAL = [
   'Ensino Médio',
   'Superior',
   'Pós-graduação',
+  'Servidor',
 ] as const
 
+// >>> Atualizado com "Servidor"
 const TIPOS_BANNER = [
   'Ensino Médio',
   'Superior',
+  'Servidor',
 ] as const
 
 const AREA_OPCOES = [
-  'Área', // (mantido a seu pedido)
+  'Área',
   'Ciências Agrárias',
   'Engenharias',
   'Inclusão',
@@ -66,23 +70,18 @@ const AREA_OPCOES = [
   'Outro',
 ] as const
 
-// =================== Form / Types locais ===================
+// =================== Form / Types ===================
 
 type FormState = {
   titulo: string
-
   categoria: Categoria | ''
   subcategoria: Subcategoria
-  tipo: string // usa listas acima conforme categoria
-
+  tipo: string
   area: string
   areaOutro: string
-
   apresentador: string
-  autores: string // "autor1; autor2; ..."
+  autores: string
 }
-
-// =================== Helpers ===================
 
 function generateProjectId(): string {
   return fsDoc(collection(db, 'trabalhos')).id
@@ -101,8 +100,6 @@ function isAreaInList(area?: string) {
   return area ? AREA_OPCOES.includes(area as any) : false
 }
 
-// =================== Componente ===================
-
 export default function ProjectForm() {
   const { id } = useParams<{ id: string }>()
   const isEdit = Boolean(id)
@@ -110,42 +107,35 @@ export default function ProjectForm() {
 
   const [form, setForm] = useState<FormState>({
     titulo: '',
-
     categoria: '',
     subcategoria: '',
     tipo: '',
-
     area: 'Área',
     areaOutro: '',
-
     apresentador: '',
     autores: '',
   })
 
-  // avaliadores / visibilidade
   const [allEvaluators, setAllEvaluators] = useState<UserRecord[]>([])
   const [isPublic, setIsPublic] = useState(true)
   const [selectedEvaluators, setSelectedEvaluators] = useState<UserRecord[]>([])
 
-  // ui state
   const [loading, setLoading] = useState<boolean>(!!id)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
-  // ------- carregar avaliadores -------
+  // carregar avaliadores
   useEffect(() => {
     (async () => {
       try {
         const users = await listUsers()
         const evals = users.filter(u => u.role === 'evaluator' || u.role === 'admin')
         setAllEvaluators(evals)
-      } catch {
-        // silencioso
-      }
+      } catch {}
     })()
   }, [])
 
-  // ------- carregar projeto (edição) -------
+  // carregar projeto em edição
   useEffect(() => {
     let alive = true
     ;(async () => {
@@ -157,21 +147,18 @@ export default function ProjectForm() {
           return
         }
 
-        // mapeia dados existentes para o novo form (mantendo compatibilidade)
         const autores = Array.isArray(p.autores) ? p.autores.join('; ') : ''
         const categoria = (p.categoria || '') as Categoria | ''
         const subcategoria = (p.subcategoria || '') as Subcategoria
         const tipo = (p.tipo || '')
         const apresentador = p.apresentador || ''
 
-        // área/areaOutro: se a área salva não está na lista, abrimos como "Outro"
         let area = p.area || 'Área'
         let areaOutro = ''
         if (!isAreaInList(area) && area) {
           areaOutro = area
           area = 'Outro'
         } else if (area === 'Outro') {
-          // se alguém salvou literalmente "Outro", deixar areaOutro vazio
           areaOutro = ''
         }
 
@@ -187,7 +174,6 @@ export default function ProjectForm() {
           autores,
         })
 
-        // visibilidade
         const assigned = normalizeAssigned(p.assignedEvaluators)
         const pub = assigned.length === 1 && assigned[0] === 'ALL'
         setIsPublic(pub)
@@ -210,7 +196,6 @@ export default function ProjectForm() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, allEvaluators])
 
-  // ------- validação: só título obrigatório -------
   const valid = useMemo(() => !!form.titulo.trim(), [form.titulo])
 
   const handleChange =
@@ -218,25 +203,21 @@ export default function ProjectForm() {
       (e: React.ChangeEvent<HTMLInputElement>) =>
         setForm(s => ({ ...s, [key]: e.target.value }))
 
-  // ------- opções de "tipo" conforme categoria -------
   const tipoOptions = useMemo(() => {
     switch (form.categoria) {
       case 'Feira de Ciências': return TIPOS_FEIRA
-      case 'Comunicação Oral': return TIPOS_COM_ORAL
-      case 'Banner': return TIPOS_BANNER
-      default: return [] // IFTECH não exige tipo
+      case 'Comunicação Oral': return TIPOS_COM_ORAL // inclui Servidor
+      case 'Banner': return TIPOS_BANNER             // inclui Servidor
+      default: return []
     }
   }, [form.categoria])
 
-  // Quando muda a categoria, limpamos subcampo se ficar inválido
+  // coerência ao mudar categoria/tipo
   useEffect(() => {
-    // IFTECH → zera subcategoria e tipo
     if (form.categoria === 'IFTECH') {
       setForm(s => ({ ...s, subcategoria: '', tipo: '' }))
       return
     }
-
-    // Feira de Ciências → sem subcategoria; tipo deve estar em TIPOS_FEIRA
     if (form.categoria === 'Feira de Ciências') {
       setForm(s => ({ ...s, subcategoria: '' }))
       if (form.tipo && !TIPOS_FEIRA.includes(form.tipo as any)) {
@@ -244,16 +225,12 @@ export default function ProjectForm() {
       }
       return
     }
-
-    // Comunicação Oral → usa subcategoria + tipo (médio/superior/pós)
     if (form.categoria === 'Comunicação Oral') {
       if (form.tipo && !TIPOS_COM_ORAL.includes(form.tipo as any)) {
         setForm(s => ({ ...s, tipo: '' }))
       }
       return
     }
-
-    // Banner → usa subcategoria + tipo (médio/superior)
     if (form.categoria === 'Banner') {
       if (form.tipo && !TIPOS_BANNER.includes(form.tipo as any)) {
         setForm(s => ({ ...s, tipo: '' }))
@@ -263,7 +240,6 @@ export default function ProjectForm() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.categoria, form.tipo])
 
-  // ------- salvar -------
   const handleSubmit = async () => {
     if (!valid) {
       setMsg({ type: 'error', text: 'Informe o título do trabalho.' })
@@ -275,37 +251,30 @@ export default function ProjectForm() {
       ? ['ALL']
       : Array.from(new Set(selectedEvaluators.map(u => u.email.toLowerCase())))
 
-    // monta autores a partir da string
     const autoresArr = form.autores
       .split(';')
       .map(s => s.trim())
       .filter(Boolean)
 
-    // resolve área final (com “Outro”)
     const areaFinal = form.area === 'Outro'
       ? (form.areaOutro || 'Outro').trim()
       : form.area
 
-    // payload **apenas com os novos campos**
     const payload: any = {
       id: isEdit && id ? id : generateProjectId(),
       titulo: form.titulo.trim(),
-
-      categoria: (form.categoria || '').trim(),          // Banner | Comunicação Oral | IFTECH | Feira de Ciências
-      subcategoria: (form.subcategoria || '').trim(),    // Ensino | Extensão | Pesquisa/Inovação (quando aplicável)
-      tipo: (form.tipo || '').trim(),                    // Fundamental | Ensino Médio | Superior | Pós-graduação (quando aplicável)
-
-      area: areaFinal || '',                             // valor direto ou "Outro" preenchido
+      categoria: (form.categoria || '').trim(),
+      subcategoria: (form.subcategoria || '').trim(),
+      tipo: (form.tipo || '').trim(), // agora inclui "Servidor" onde permitido
+      area: areaFinal || '',
       apresentador: (form.apresentador || '').trim(),
       autores: autoresArr,
-
-      // visibilidade
       assignedEvaluators: normalizeAssigned(assigned),
       updatedAt: new Date(),
     }
 
     try {
-      await saveProject(payload) // service salva apenas campos novos
+      await saveProject(payload)
       setMsg({ type: 'success', text: 'Projeto salvo com sucesso' })
       nav('/admin/projects')
     } catch (e:any) {
@@ -315,15 +284,12 @@ export default function ProjectForm() {
     }
   }
 
-  // ------- UI -------
   const showSubcategoria =
     form.categoria === 'Comunicação Oral' || form.categoria === 'Banner'
-
   const showTipo =
     form.categoria === 'Comunicação Oral' ||
     form.categoria === 'Banner' ||
     form.categoria === 'Feira de Ciências'
-
   const showAreaOutro = form.area === 'Outro'
 
   return (
@@ -445,7 +411,6 @@ export default function ProjectForm() {
               minRows={2}
             />
 
-            {/* Visibilidade */}
             <FormControlLabel
               control={
                 <Switch
@@ -489,4 +454,3 @@ export default function ProjectForm() {
     </Box>
   )
 }
-// =================== Fim do componente ===================

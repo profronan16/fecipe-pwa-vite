@@ -1,4 +1,3 @@
-// src/contexts/AuthContext.tsx
 import {
   createContext, useContext, useEffect, useMemo, useState, ReactNode,
 } from 'react'
@@ -12,19 +11,20 @@ import {
   createUserWithEmailAndPassword,
   updateProfile,
 } from 'firebase/auth'
-import {
-  doc, getDoc, setDoc, serverTimestamp,
-} from 'firebase/firestore'
+import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore'
 import { auth, db } from '@services/firebase'
-import { humanizeAuthError } from '@utils/authErrors' // se não tiver, remova esses imports e mensagens amigáveis
+// Se não tiver util de erros amigáveis, pode remover e usar e.message direto
+import { humanizeAuthError } from '@utils/authErrors'
 
 type Role = 'admin' | 'evaluator' | null
 
 type AuthContextType = {
   user: User | null
   role: Role
-  active: boolean | null        // <── novo: status de ativação
+  active: boolean | null
   loading: boolean
+  /** Sinaliza que já sabemos se existe user ou não (onAuthStateChanged rodou) */
+  authReady: boolean
   authError: string | null
   authErrorCode: string | null
   clearAuthError: () => void
@@ -39,14 +39,14 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined)
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [role, setRole] = useState<Role>(null)
-  const [active, setActive] = useState<boolean | null>(null) // <── novo
+  const [active, setActive] = useState<boolean | null>(null)
   const [loading, setLoading] = useState(true)
+  const [authReady, setAuthReady] = useState(false)
   const [authError, setAuthError] = useState<string | null>(null)
   const [authErrorCode, setAuthErrorCode] = useState<string | null>(null)
 
   const clearAuthError = () => { setAuthError(null); setAuthErrorCode(null) }
 
-  // garante doc de perfil; retorna role e active
   const ensureUserProfile = async (u: User): Promise<{ role: Role; active: boolean }> => {
     const email = u.email?.toLowerCase()
     if (!email) return { role: 'evaluator', active: false }
@@ -63,21 +63,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }, { merge: true })
       return { role: 'evaluator', active: true }
     }
-    const data = snap.data() as any
-    const r = (data.role as Role) || 'evaluator'
-    const a = data.active !== false
-    return { role: r, active: a }
+    const d = snap.data() as any
+    return { role: (d.role as Role) || 'evaluator', active: d.active !== false }
   }
 
   const loadUserMeta = async (u: User | null) => {
-    if (!u?.email) {
-      setRole(null)
-      setActive(null)
-      return
-    }
+    if (!u?.email) { setRole(null); setActive(null); return }
     const { role: r, active: a } = await ensureUserProfile(u)
-    setRole(r)
-    setActive(a)
+    setRole(r); setActive(a)
   }
 
   useEffect(() => {
@@ -85,14 +78,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(true)
       setUser(usr)
       try {
-        if (usr) {
-          await loadUserMeta(usr)
-        } else {
-          setRole(null)
-          setActive(null)
-        }
+        if (usr) await loadUserMeta(usr)
+        else { setRole(null); setActive(null) }
       } finally {
         setLoading(false)
+        setAuthReady(true) // << importante
       }
     })
     return () => unsub()
@@ -105,8 +95,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const cred = await signInWithPopup(auth, provider)
       const meta = await ensureUserProfile(cred.user)
       setRole(meta.role); setActive(meta.active)
-      // se estiver desativado, apenas mantém logado até o guard barrar e exibir a tela de bloqueio
-    } catch (e) {
+    } catch (e: any) {
       const { code, message } = humanizeAuthError(e)
       setAuthError(message); setAuthErrorCode(code)
       throw e
@@ -119,7 +108,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const cred = await signInWithEmailAndPassword(auth, email, password)
       const meta = await ensureUserProfile(cred.user)
       setRole(meta.role); setActive(meta.active)
-    } catch (e) {
+    } catch (e: any) {
       const { code, message } = humanizeAuthError(e)
       setAuthError(message); setAuthErrorCode(code)
       throw e
@@ -141,7 +130,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         updatedAt: serverTimestamp(),
       }, { merge: true })
       setRole('evaluator'); setActive(true)
-    } catch (e) {
+    } catch (e: any) {
       const { code, message } = humanizeAuthError(e)
       setAuthError(message); setAuthErrorCode(code)
       throw e
@@ -150,15 +139,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = async () => {
     await signOut(auth)
-    setRole(null)
-    setActive(null)
+    setRole(null); setActive(null)
   }
 
   const value = useMemo<AuthContextType>(() => ({
-    user, role, active, loading,
+    user, role, active, loading, authReady,
     authError, authErrorCode, clearAuthError,
     loginWithGoogle, loginWithPassword, registerWithPassword, logout,
-  }), [user, role, active, loading, authError, authErrorCode])
+  }), [user, role, active, loading, authReady, authError, authErrorCode])
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

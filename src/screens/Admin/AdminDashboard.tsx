@@ -7,6 +7,7 @@ import {
 import { collection, getDocs } from 'firebase/firestore'
 import { db } from '@services/firebase'
 import { useNavigate } from 'react-router-dom'
+import RecomputeButton from '@components/RecomputeButton'
 
 // Pesos/constante conforme app mobile (Dashboard/Reports)
 const WEIGHTS = [0.9, 0.8, 0.7, 0.6, 0.6, 0.4, 0.4, 0.3, 0.3] // 9 critérios padrão
@@ -156,6 +157,7 @@ export default function AdminDashboard() {
 
                 <Stack direction="row" gap={1} flexWrap="wrap">
                     <Button variant="outlined" onClick={load}>Recarregar</Button>
+                    <RecomputeButton />
                     <Button variant="contained" onClick={() => nav('/admin/projects')}>Projetos</Button>
                     <Button variant="contained" onClick={() => nav('/admin/evaluators')}>Avaliadores</Button>
                     <Button variant="contained" onClick={() => nav('/admin/reports')}>Relatórios</Button>
