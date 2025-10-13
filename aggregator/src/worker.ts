@@ -3,13 +3,29 @@ import 'dotenv/config'
 import admin from 'firebase-admin'
 import { RUBRICS, rubricIdForProject } from './rubrics.js'
 
-const app = admin.initializeApp({
-  credential: admin.credential.cert({
-    projectId: process.env.FIREBASE_PROJECT_ID!,
-    clientEmail: process.env.FIREBASE_CLIENT_EMAIL!,
-    privateKey: (process.env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n'),
-  }),
-})
+// Preferimos GOOGLE_APPLICATION_CREDENTIALS (JSON no disco). Se não existir, tentamos vars de ambiente.
+function initAdminApp() {
+  const hasADC = !!process.env.GOOGLE_APPLICATION_CREDENTIALS
+  if (hasADC) {
+    return admin.initializeApp({
+      credential: admin.credential.applicationDefault(),
+    })
+  }
+  // Fallback por variáveis (cuidado no Windows com \n):
+  const projectId = process.env.FIREBASE_PROJECT_ID
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL
+  const privateKey = (process.env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n')
+  if (!projectId || !clientEmail || !privateKey) {
+    throw new Error(
+      'Credenciais ausentes. Defina GOOGLE_APPLICATION_CREDENTIALS ou FIREBASE_PROJECT_ID/FIREBASE_CLIENT_EMAIL/FIREBASE_PRIVATE_KEY.'
+    )
+  }
+  return admin.initializeApp({
+    credential: admin.credential.cert({ projectId, clientEmail, privateKey }),
+  })
+}
+
+const app = initAdminApp()
 const db = admin.firestore()
 
 type Scores = Record<string, number>
@@ -28,7 +44,7 @@ export async function recomputeAll() {
 
   // 1) Ler todos os trabalhos
   const worksSnap = await db.collection('trabalhos').get()
-  const works = worksSnap.docs.map(d => ({ id: d.id, ...d.data() as any }))
+  const works = worksSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }))
 
   // 2) Para cada trabalho, calcular NaCi (média dos avaliadores por critério)
   const workNa: Record<string, Scores> = {}
@@ -132,7 +148,7 @@ export async function recomputeAll() {
   console.timeEnd('[aggregator] recomputeAll')
 }
 
-/** CLI: permite rodar `npm run recompute` para executar uma vez e sair. */
+// CLI: `npm run recompute` executa uma vez e sai
 if (process.argv.includes('--once')) {
   recomputeAll().then(() => {
     console.log('[aggregator] done.')
