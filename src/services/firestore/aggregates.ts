@@ -26,9 +26,6 @@ export async function getWorkAggregate(workId: string): Promise<WorkAggregate | 
   }
 }
 
-/**
- * Soma simples dos critérios no doc de avaliação (scores/notas).
- */
 function sumScores(scores: Record<string, unknown> | undefined): number {
   if (!scores) return 0
   let total = 0
@@ -39,12 +36,13 @@ function sumScores(scores: Record<string, unknown> | undefined): number {
   return total
 }
 
-/**
- * Top N avaliadores (por soma de notas no trabalho).
- */
-export async function getTopEvaluatorsForWork(workId: string, topN = 3): Promise<Array<{ uid: string; total: number }>> {
-  const q = query(collection(db, 'avaliacoes'), where('trabalhoId', '==', workId))
-  const snap = await getDocs(q)
+/** Top N avaliadores (por soma de notas no trabalho). */
+export async function getTopEvaluatorsForWork(
+  workId: string,
+  topN = 3
+): Promise<Array<{ uid: string; total: number }>> {
+  const qRef = query(collection(db, 'avaliacoes'), where('trabalhoId', '==', workId))
+  const snap = await getDocs(qRef)
 
   const arr: Array<{ uid: string; total: number }> = []
   for (const d of snap.docs) {
@@ -58,43 +56,42 @@ export async function getTopEvaluatorsForWork(workId: string, topN = 3): Promise
   return arr.slice(0, topN)
 }
 
-/**
- * Resolve nome do usuário para um único UID:
- * - tenta users/{uid}
- * - senão, busca users where uid == uid (doc com ID = e-mail, p.ex.)
+/** Resolve nome por UID:
+ *  1) profiles/{uid}
+ *  2) users/{uid}
+ *  3) users where uid == uid
+ *  4) fallback: e-mail do doc encontrado ou o próprio uid
  */
 async function resolveUserName(uid: string): Promise<string> {
-  // 1) doc(users/{uid})
+  // 1) profiles/{uid}
+  const prof = await getDoc(doc(db, 'profiles', uid))
+  if (prof.exists()) {
+    const d = prof.data() as any
+    return d.displayName || d.name || d.nome || d.email || uid
+  }
+
+  // 2) users/{uid}
   const byId = await getDoc(doc(db, 'users', uid))
   if (byId.exists()) {
     const d = byId.data() as any
     return d.displayName || d.name || d.nome || d.email || uid
   }
 
-  // 2) query(users, where('uid','==', uid))
+  // 3) users where uid == uid
   const qUid = query(collection(db, 'users'), where('uid', '==', uid), qLimit(1))
-  const snapUid = await getDocs(qUid)
-  if (!snapUid.empty) {
-    const d = snapUid.docs[0].data() as any
+  const sUid = await getDocs(qUid)
+  if (!sUid.empty) {
+    const d = sUid.docs[0].data() as any
     return d.displayName || d.name || d.nome || d.email || uid
   }
 
-  // 3) fallback
   return uid
 }
 
-/**
- * Resolve nomes para um array de UIDs. Faz busca individual resiliente
- * (evita limite do "in" e suporta docId != uid).
- */
+/** Resolve nomes para um array de UIDs. */
 export async function getUserNames(uids: string[]): Promise<Record<string, string>> {
   const out: Record<string, string> = {}
-  // elimina duplicados
   const unique = Array.from(new Set(uids.filter(Boolean)))
-  await Promise.all(
-    unique.map(async (u) => {
-      out[u] = await resolveUserName(u)
-    })
-  )
+  await Promise.all(unique.map(async (u) => { out[u] = await resolveUserName(u) }))
   return out
 }

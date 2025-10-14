@@ -1,12 +1,11 @@
-// src/screens/Projects/ProjectsScreen.tsx
 import { useEffect, useMemo, useState } from 'react'
 import {
   Box, Card, CardContent, Typography, Stack, TextField, InputAdornment,
-  IconButton, Chip, Grid, CircularProgress, Button
+  IconButton, Chip, Grid, CircularProgress, Button, Divider
 } from '@mui/material'
 import SearchIcon from '@mui/icons-material/Search'
 import RefreshIcon from '@mui/icons-material/Refresh'
-import { listProjects } from '@services/firestore/projects' // sua função de listagem
+import { listProjects } from '@services/firestore/projects'
 import { getWorkAggregate, getTopEvaluatorsForWork, getUserNames } from '@services/firestore/aggregates'
 import { useNavigate } from 'react-router-dom'
 
@@ -39,7 +38,31 @@ export default function ProjectsScreen() {
     )
   }, [q, projects])
 
-  // Carrega projetos e, em seguida, NF e top avaliadores
+  async function loadAggregates(list: Project[]) {
+    const nfTemp: Record<string, number> = {}
+    const topTemp: Record<string, Array<{ name: string; total: number }>> = {}
+
+    for (const p of list) {
+      const [agg, top3] = await Promise.all([
+        getWorkAggregate(p.id),
+        getTopEvaluatorsForWork(p.id, 3),
+      ])
+      if (agg?.nf != null) nfTemp[p.id] = agg.nf
+
+      if (top3.length) {
+        const names = await getUserNames(top3.map(t => t.uid))
+        topTemp[p.id] = top3.map(t => ({
+          name: names[t.uid] || t.uid,
+          total: Number(t.total.toFixed(2)),
+        }))
+      } else {
+        topTemp[p.id] = []
+      }
+    }
+    setNfMap(nfTemp)
+    setTopEvalMap(topTemp)
+  }
+
   useEffect(() => {
     let alive = true
     ;(async () => {
@@ -48,27 +71,7 @@ export default function ProjectsScreen() {
         const list = await listProjects()
         if (!alive) return
         setProjects(list as any)
-
-        // Carregar agregados em paralelo
-        const nfTemp: Record<string, number> = {}
-        const topTemp: Record<string, Array<{ name: string; total: number }>> = {}
-
-        for (const p of list) {
-          // NF
-          const agg = await getWorkAggregate(p.id)
-          if (agg?.nf != null) nfTemp[p.id] = agg.nf
-
-          // Top avaliadores (com nome)
-          const top3 = await getTopEvaluatorsForWork(p.id, 3)
-          const names = await getUserNames(top3.map(t => t.uid))
-          topTemp[p.id] = top3.map(t => ({
-            name: names[t.uid] || t.uid,
-            total: Number(t.total.toFixed(2))
-          }))
-        }
-        if (!alive) return
-        setNfMap(nfTemp)
-        setTopEvalMap(topTemp)
+        await loadAggregates(list as any)
       } finally {
         if (alive) setLoading(false)
       }
@@ -77,24 +80,12 @@ export default function ProjectsScreen() {
   }, [])
 
   const handleRefresh = async () => {
-    // Apenas recarrega os agregados (sem reconsultar os projetos)
     setLoading(true)
-    const nfTemp: Record<string, number> = {}
-    const topTemp: Record<string, Array<{ name: string; total: number }>> = {}
-    for (const p of projects) {
-      const agg = await getWorkAggregate(p.id)
-      if (agg?.nf != null) nfTemp[p.id] = agg.nf
-
-      const top3 = await getTopEvaluatorsForWork(p.id, 3)
-      const names = await getUserNames(top3.map(t => t.uid))
-      topTemp[p.id] = top3.map(t => ({
-        name: names[t.uid] || t.uid,
-        total: Number(t.total.toFixed(2))
-      }))
+    try {
+      await loadAggregates(projects)
+    } finally {
+      setLoading(false)
     }
-    setNfMap(nfTemp)
-    setTopEvalMap(topTemp)
-    setLoading(false)
   }
 
   return (
@@ -132,8 +123,8 @@ export default function ProjectsScreen() {
             const top = topEvalMap[p.id] || []
             return (
               <Grid item xs={12} sm={6} md={4} key={p.id}>
-                <Card variant="outlined">
-                  <CardContent>
+                <Card variant="outlined" sx={{ height: '100%', borderRadius: 2 }}>
+                  <CardContent sx={{ p: 3 }}>
                     <Stack spacing={1}>
                       <Typography variant="h6" fontWeight={700} gutterBottom>
                         {p.titulo || '(sem título)'}
@@ -146,13 +137,13 @@ export default function ProjectsScreen() {
                         {p.area && <Chip size="small" label={p.area} />}
                       </Stack>
 
-                      {/* Nota Final */}
                       <Typography variant="body1" sx={{ mt: 1 }}>
                         <strong>Nota Final:</strong> {nf != null ? nf.toFixed(2) : '—'}
                       </Typography>
 
-                      {/* Top 3 avaliadores por total de notas lançadas */}
-                      <Box sx={{ mt: 1 }}>
+                      <Divider />
+
+                      <Box>
                         <Typography variant="body2" color="text.secondary" fontWeight={700}>
                           Avaliadores (top 3 pelo total):
                         </Typography>

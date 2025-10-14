@@ -1,4 +1,3 @@
-// src/screens/Evaluator/EvaluatorDashboard.tsx
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Box, Grid, Card, CardContent, CardActions,
@@ -13,7 +12,8 @@ type Project = {
   id: string
   titulo: string
   categoria?: string
-  turma?: string
+  subcategoria?: string
+  tipo?: string
 }
 
 type EvalDoc = {
@@ -43,7 +43,13 @@ export default function EvaluatorDashboard() {
       const projSnap = await getDocs(collection(db, 'trabalhos'))
       const projects: Project[] = projSnap.docs.map(d => {
         const data = d.data() as any
-        return { id: d.id, titulo: data.titulo || '—', categoria: data.categoria, turma: data.turma }
+        return {
+          id: d.id,
+          titulo: data.titulo || '—',
+          categoria: data.categoria,
+          subcategoria: data.subcategoria,
+          tipo: data.tipo,
+        }
       })
       setAllProjects(projects)
 
@@ -54,7 +60,7 @@ export default function EvaluatorDashboard() {
       ))
       const evals: EvalDoc[] = myEvalSnap.docs.map(d => {
         const data = d.data() as any
-        return { id: d.id, trabalhoId: data.trabalhoId, createdAt: data.createdAt, updatedAt: data.updatedAt, notas: data.notas }
+        return { id: d.id, trabalhoId: data.trabalhoId, createdAt: data.createdAt, updatedAt: data.updatedAt, notas: data.notas ?? data.scores }
       })
       setMyEvals(evals)
 
@@ -64,9 +70,7 @@ export default function EvaluatorDashboard() {
       await Promise.all(uniq.map(async pid => {
         if (!pid) return
         const s = await getDoc(doc(db, 'trabalhos', pid))
-        if (s.exists()) {
-          cache[pid] = (s.data() as any).titulo || '—'
-        }
+        if (s.exists()) cache[pid] = (s.data() as any).titulo || '—'
       }))
       setProjectTitleCache(cache)
     } catch (e: any) {
@@ -78,7 +82,6 @@ export default function EvaluatorDashboard() {
 
   useEffect(() => { load() }, [load])
 
-  // ----- métricas -----
   const availableCount = useMemo(() => {
     if (!user) return 0
     const done = new Set(myEvals.map(e => e.trabalhoId))
@@ -88,7 +91,6 @@ export default function EvaluatorDashboard() {
   const myEvaluationsCount = myEvals.length
 
   const recent = useMemo(() => {
-    // ordena por updatedAt/createdAt (quando disponível)
     const sortVal = (e: EvalDoc) => (e.updatedAt?.seconds || e.createdAt?.seconds || 0)
     return [...myEvals].sort((a, b) => sortVal(b) - sortVal(a)).slice(0, 3)
   }, [myEvals])
@@ -102,7 +104,7 @@ export default function EvaluatorDashboard() {
         spacing={2}
         sx={{ mb: 2 }}
       >
-        <Typography variant="h5" fontWeight={800}>👋 Bem-vindo(a) ao Painel do Avaliador</Typography>
+        <Typography variant="h5" fontWeight={800}>👋 Painel do Avaliador</Typography>
         <Stack direction="row" gap={1} flexWrap="wrap">
           <Button variant="outlined" onClick={load}>Recarregar</Button>
         </Stack>
