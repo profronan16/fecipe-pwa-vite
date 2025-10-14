@@ -16,7 +16,7 @@ const app = initializeApp({
 })
 const db = getFirestore(app)
 
-// ---------- utils ----------
+// ---------------- utils ----------------
 const EPS = 1e-9
 const round = (n: number, p = 6) => Math.round(n * 10 ** p) / 10 ** p
 const isDbg = () =>
@@ -25,9 +25,27 @@ const isDbg = () =>
   process.argv.includes('-d')
 const dlog = (...a: any[]) => { if (isDbg()) console.log(...a) }
 const dheader = (t: string) => { if (isDbg()) console.log(`\n================ ${t} ================`) }
-const dtable = (label: string, rows: any[]) => { if (isDbg()) { console.log(`\n${label}`); console.table(rows) }}
+const dtable = (label: string, rows: any[]) => { if (isDbg()) { console.log(`\n${label}`); console.table(rows) } }
 
-// ---------- tipos ----------
+function parseMaybeNumber(v: any): number {
+  if (typeof v === 'number') return v
+  if (typeof v === 'string') {
+    const s = v.replace(',', '.').trim()
+    const n = Number(s)
+    return Number.isFinite(n) ? n : NaN
+  }
+  return NaN
+}
+
+function stdPopulation(values: number[]): number {
+  const vals = values.filter(v => Number.isFinite(v))
+  if (!vals.length) return 0
+  const mean = vals.reduce((a, b) => a + b, 0) / vals.length
+  const variance = vals.reduce((sum, v) => sum + (v - mean) ** 2, 0) / vals.length
+  return Math.sqrt(variance)
+}
+
+// ---------------- tipos ----------------
 type EvalDoc = {
   trabalhoId: string
   avaliadorId: string
@@ -45,38 +63,31 @@ type Work = {
   area?: string
 }
 
-// ---------- parsing robusto ----------
-/**
- * Converte uma avaliação para um mapa { C1: number, C2: number, ... }.
- * Prioriza o formato do seu banco: criterios: [{id:'c1', value:1.5}, ...]
- * e mantém compatibilidade com 'notas', 'scores', etc.
- */
+// --------- parsing: mapeia avaliação → { C1: num, C2: num, ... } ----------
 function mapScoresFromEvaluation(e: EvalDoc, criteriaLen: number): Record<CriterionId, number> {
   const out: Record<CriterionId, number> = {}
-  // inicializa com zero
   for (let i = 1; i <= criteriaLen; i++) out[`C${i}` as CriterionId] = 0
 
-  // 1) formato que você usa: criterios: Array<{id:'cN', value:number}>
+  // formato “oficial” do seu banco: criterios: [{id:'c1', value:1.5}, ...]
   if (Array.isArray(e.criterios) && e.criterios.length) {
     for (const item of e.criterios) {
-      const idRaw = String(item?.id ?? '').trim().toLowerCase() // ex: 'c1'
-      const vRaw = item?.value
-      const num = parseMaybeNumber(vRaw)
+      const idRaw = String(item?.id ?? '').trim().toLowerCase() // 'c1'
+      const val = parseMaybeNumber(item?.value)
       const m = idRaw.match(/^c(\d+)$/)
       if (m && Number(m[1]) >= 1) {
         const key = `C${Number(m[1])}` as CriterionId
-        if (Number.isFinite(num)) out[key] = num
+        if (Number.isFinite(val)) out[key] = val
       }
     }
   }
 
-  // 2) compat: objetos como { C1:2, c2:"1,5", criterio3:1, ... }
-  const candidates = [e.notas, e.scores, e]
-  for (const bag of candidates) {
+  // compat: objetos soltos (notas/scores/e)
+  const bags = [e.notas, e.scores, e]
+  for (const bag of bags) {
     if (!bag || typeof bag !== 'object' || Array.isArray(bag)) continue
     for (let i = 1; i <= criteriaLen; i++) {
       const key = `C${i}` as CriterionId
-      if (out[key] !== 0) continue // já preenchido pelo formato 'criterios'
+      if (out[key] !== 0) continue
       const aliases = [
         `C${i}`, `c${i}`, `${i}`,
         `criterio${i}`, `crit${i}`, `nota${i}`,
@@ -84,8 +95,8 @@ function mapScoresFromEvaluation(e: EvalDoc, criteriaLen: number): Record<Criter
       ]
       for (const a of aliases) {
         if (a in bag) {
-          const num = parseMaybeNumber(bag[a])
-          if (Number.isFinite(num)) { out[key] = num; break }
+          const n = parseMaybeNumber(bag[a])
+          if (Number.isFinite(n)) { out[key] = n; break }
         }
       }
     }
@@ -94,25 +105,7 @@ function mapScoresFromEvaluation(e: EvalDoc, criteriaLen: number): Record<Criter
   return out
 }
 
-function stdPopulation(values: number[]): number {
-  const vals = values.filter(v => Number.isFinite(v))
-  if (!vals.length) return 0
-  const mean = vals.reduce((a, b) => a + b, 0) / vals.length
-  const variance = vals.reduce((sum, v) => sum + (v - mean) ** 2, 0) / vals.length
-  return Math.sqrt(variance)
-}
-
-function parseMaybeNumber(v: any): number {
-  if (typeof v === 'number') return v
-  if (typeof v === 'string') {
-    const s = v.replace(',', '.').trim()
-    const n = Number(s)
-    return Number.isFinite(n) ? n : NaN
-  }
-  return NaN
-}
-
-// ---------- pipeline ----------
+// ---------------- pipeline ----------------
 export async function recomputeAll(opts?: { debug?: boolean }) {
   if (opts?.debug) process.env.DEBUG_AGG_LOG = '1'
 
@@ -120,7 +113,7 @@ export async function recomputeAll(opts?: { debug?: boolean }) {
   const trabSnap = await getDocs(collection(db, 'trabalhos'))
   const works: Work[] = trabSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }))
 
-  // 2) agrupa por rúbrica
+  // 2) agrupar por rúbrica
   const byRubric = new Map<string, { rubric: Rubric; works: Work[] }>()
   for (const w of works) {
     const r = resolveRubricIdFromWork(w)
@@ -128,7 +121,6 @@ export async function recomputeAll(opts?: { debug?: boolean }) {
     byRubric.get(r.id)!.works.push(w)
   }
 
-  // 3) processa cada grupo
   for (const [rubricId, group] of byRubric) {
     dheader(`RÚBRICA ${rubricId} — ${group.rubric.label}`)
     await recomputeGroup(group.rubric, group.works)
@@ -141,8 +133,12 @@ async function recomputeGroup(rubric: Rubric, works: Work[]) {
   if (!works.length) return
   const k = rubric.criteria.length
 
-  // NaCi por trabalho
+  // (A) médias por TRABALHO/critério (NaCi)
   const NaCByWork = new Map<string, Record<CriterionId, number>>()
+
+  // (B) base global por critério com TODAS as notas individuais (para MCi/σi)
+  const allScoresByCriterion: Record<CriterionId, number[]> =
+    Object.fromEntries(rubric.criteria.map(c => [c, []])) as any
 
   for (const w of works) {
     const qEval = query(collection(db, 'avaliacoes'), where('trabalhoId', '==', w.id))
@@ -161,10 +157,18 @@ async function recomputeGroup(rubric: Rubric, works: Work[]) {
         dlog(` • eval ${d.id} →`, seen.join(', '))
       }
 
+      // acumula para NaCi (por trabalho)
       for (const c of rubric.criteria) {
         const v = Number(m[c] ?? 0)
         if (Number.isFinite(v)) { sum[c] += v; cnt[c] += 1 }
       }
+
+      // acumula notas individuais para base GLOBAL (MCi/σi)
+      for (const c of rubric.criteria) {
+        const v = Number(m[c] ?? 0)
+        if (Number.isFinite(v)) allScoresByCriterion[c].push(v)
+      }
+
       evalCount++
     }
 
@@ -174,25 +178,29 @@ async function recomputeGroup(rubric: Rubric, works: Work[]) {
 
     dlog(`Trabalho ${w.id} (${w.titulo || '—'}) — avaliações: ${evalCount}`)
     dtable('NaCi (média por critério)', rubric.criteria.map(c => ({ criterio: c, NaCi: round(mean[c], 6) })))
-    if (rubric.criteria.every(c => (mean[c] || 0) === 0)) {
-      dlog('   ⚠ Todos NaCi=0. Confirme se os documentos têm "criterios:[{id:"c1",value:...}]" ou campos equivalentes.')
-    }
   }
 
-  // MCi e σi
+  // (C) MCi e σi sobre TODAS as notas individuais (não sobre NaCi)
   const MCi: Record<CriterionId, number> = {} as any
   const SDi: Record<CriterionId, number> = {} as any
-  rubric.criteria.forEach(c => {
-  const vals = works.map(w => NaCByWork.get(w.id)?.[c] ?? 0)
-  const mean = vals.reduce((a, b) => a + b, 0) / (vals.length || 1)
-  const sd = stdPopulation(vals) // ← aqui chamamos a função populacional
-  MCi[c] = mean
-  SDi[c] = sd
-})
-  dtable('MCi (média global por critério no grupo)', rubric.criteria.map(c => ({ criterio: c, MCi: round(MCi[c], 6) })))
-  dtable('σi (desvio padrão global por critério no grupo)', rubric.criteria.map(c => ({ criterio: c, sigma: round(SDi[c], 6) })))
 
-  // NCi e NF por trabalho
+  for (const c of rubric.criteria) {
+    const arr = allScoresByCriterion[c] || []
+    const mean = arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0
+    const sd = stdPopulation(arr)
+    MCi[c] = mean
+    SDi[c] = sd
+  }
+
+  if (isDbg()) {
+    dtable('Base global (contagem por critério)', rubric.criteria.map(c => ({
+      criterio: c, n: (allScoresByCriterion[c] || []).length,
+    })))
+    dtable('MCi (média global por critério — todas as notas)', rubric.criteria.map(c => ({ criterio: c, MCi: round(MCi[c], 6) })))
+    dtable('σi (desvio padrão populacional — todas as notas)', rubric.criteria.map(c => ({ criterio: c, sigma: round(SDi[c], 11) })))
+  }
+
+  // (D) NCi e NF por trabalho
   for (const w of works) {
     const NaC = NaCByWork.get(w.id) || {}
     const NCi: Record<CriterionId, number> = {} as any
@@ -215,7 +223,7 @@ async function recomputeGroup(rubric: Rubric, works: Work[]) {
       criterio: c,
       NaCi: round(NaC[c] ?? 0, 6),
       MCi: round(MCi[c] ?? 0, 6),
-      sigma: round(SDi[c] ?? 0, 6),
+      sigma: round(SDi[c] ?? 0, 11),
       peso: rubric.weights[c],
     })))
     dtable('NCi e contribuição (NCi * peso)', rubric.criteria.map(c => ({
@@ -228,10 +236,10 @@ async function recomputeGroup(rubric: Rubric, works: Work[]) {
     await setDoc(doc(db, 'workAggregates', w.id), {
       workId: w.id,
       rubricId: rubric.id,
-      meanByCriterion: NaC, // C1..Ck
-      meanGlobal: MCi,      // C1..Ck
-      stdGlobal: SDi,       // C1..Ck
-      nci: NCi,             // C1..Ck
+      meanByCriterion: NaC,   // NaCi por trabalho
+      meanGlobal: MCi,        // média global por critério (todas as notas)
+      stdGlobal: SDi,         // σ global por critério (todas as notas)
+      nci: NCi,
       nf: NF,
       updatedAt: new Date().toISOString(),
     }, { merge: true })
