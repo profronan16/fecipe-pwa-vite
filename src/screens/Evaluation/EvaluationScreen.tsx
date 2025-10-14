@@ -281,28 +281,29 @@ export default function EvaluationScreen() {
   }
 
   const handleSalvar = async () => {
-    if (!projeto || !user?.uid) return
-    setLoading(true); setError(null)
-    try {
-      const idFinal = detEvalId(projeto.id, user.uid)
-      await setDoc(doc(db, 'avaliacoes', idFinal), {
-        id: idFinal,
-        trabalhoId: projeto.id,
-        avaliadorId: user.uid,
-        scores,
-        notas: scores, // compat
-        criterios: criterios.map(c => ({ id: c.id, label: c.label, value: scores[c.id] ?? null })),
-        observacoes: observacoes || '',
-        updatedAt: serverTimestamp(),
-        ...(avaliacaoId ? {} : { createdAt: serverTimestamp() }),
-      }, { merge: true })
-      setAvaliacaoId(idFinal)
-    } catch (e: any) {
-      setError(e?.message || 'Falha ao salvar avaliação.')
-    } finally {
-      setLoading(false)
-    }
+  if (!projeto || !user?.uid) return
+  setLoading(true); setError(null)
+  try {
+    const idFinal = `${projeto.id}_${user.uid}`
+    await setDoc(doc(db, 'avaliacoes', idFinal), {
+      id: idFinal,
+      trabalhoId: projeto.id,
+      avaliadorId: user.uid,
+      scores,
+      notas: scores,
+      criterios: criterios.map(c => ({ id: c.id, label: c.label, value: scores[c.id] ?? null })),
+      observacoes: observacoes || '',
+      updatedAt: serverTimestamp(),
+      ...(avaliacaoId ? {} : { createdAt: serverTimestamp() }),
+    }, { merge: true })
+    // redireciona para a lista de trabalhos após salvar
+    nav('/evaluator/works', { replace: true })
+  } catch (e: any) {
+    setError(e?.message || 'Falha ao salvar avaliação.')
+  } finally {
+    setLoading(false)
   }
+}
 
   return (
     <Box>

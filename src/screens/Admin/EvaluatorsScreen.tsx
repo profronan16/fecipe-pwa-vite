@@ -1,170 +1,265 @@
 // src/screens/Admin/EvaluatorsScreen.tsx
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Box, Stack, Typography, Button, Card, CardContent, CardActions,
-  TextField, IconButton, Tooltip, LinearProgress, Alert, Chip, Grid,
-  Dialog, DialogTitle, DialogContent, DialogContentText, DialogActions
+  TextField, IconButton, Chip, LinearProgress, Alert, Dialog, DialogTitle,
+  DialogContent, DialogActions, Tooltip
 } from '@mui/material'
-import AddIcon from '@mui/icons-material/Add'
-import EditIcon from '@mui/icons-material/Edit'
+import UploadFileIcon from '@mui/icons-material/UploadFile'
+import CloudUploadIcon from '@mui/icons-material/CloudUpload'
 import DeleteIcon from '@mui/icons-material/Delete'
-import { useNavigate } from 'react-router-dom'
-import { collection, deleteDoc, doc, getDocs, query } from 'firebase/firestore'
+import HowToRegIcon from '@mui/icons-material/HowToReg'
+import BlockIcon from '@mui/icons-material/Block'
+import { collection, doc, getDocs, orderBy, query, setDoc, updateDoc } from 'firebase/firestore'
 import { db } from '@services/firebase'
+import { initializeApp, deleteApp, getApps } from 'firebase/app'
+import { getAuth as getAuthPrimary } from 'firebase/auth'
+import { getAuth as getAuthSecondary, createUserWithEmailAndPassword, updateProfile, signOut } from 'firebase/auth'
+import { useAuth } from '@contexts/AuthContext'
 
-type UserRow = {
-  id: string
-  name?: string
-  email?: string
+type Profile = {
+  uid: string
+  email: string
+  displayName?: string
   role?: 'evaluator' | 'admin'
   active?: boolean
-  categorias?: string[]
   updatedAt?: any
 }
 
-const normalize = (s: any) =>
-  String(s ?? '')
-    .replace(/\u00A0/g, ' ')
-    .trim()
-    .normalize('NFD')
-    .replace(/\p{Diacritic}/gu, '')
-    .toLowerCase()
+function parseCSV(text: string): Array<{ name: string; email: string; password: string }> {
+  // Aceita separador ; ou , — com ou sem aspas
+  const lines = text
+    .split(/\r?\n/)
+    .map(l => l.trim())
+    .filter(Boolean)
+
+  const rows: Array<{ name: string; email: string; password: string }> = []
+  for (const raw of lines) {
+    // quebra por ; preferencialmente, senão por ,
+    const parts = raw.includes(';') ? raw.split(';') : raw.split(',')
+    const [name, email, password] = parts.map(s => (s ?? '').trim().replace(/^"(.*)"$/, '$1'))
+    if (!email || !password) continue
+    rows.push({ name: name || email.split('@')[0], email, password })
+  }
+  return rows
+}
 
 export default function EvaluatorsScreen() {
-  const nav = useNavigate()
+  const { user } = useAuth()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [rows, setRows] = useState<UserRow[]>([])
-  const [q, setQ] = useState('')
-  const [confirmId, setConfirmId] = useState<string | null>(null)
-  const [feedback, setFeedback] = useState<{ type: 'success' | 'error' | 'info', text: string } | null>(null)
+  const [profiles, setProfiles] = useState<Profile[]>([])
+  const [filter, setFilter] = useState('')
 
-  const load = useCallback(async () => {
-    setLoading(true); setError(null)
-    try {
-      const snap = await getDocs(query(collection(db, 'users')))
-      const list: UserRow[] = snap.docs.map(d => {
-        const u = d.data() as any
-        return {
-          id: d.id,
-          name: u.name || '',
-          email: u.email || d.id,
-          role: (u.role || 'evaluator') as 'evaluator' | 'admin',
-          active: u.active !== false,
-          categorias: Array.isArray(u.categorias) ? u.categorias : [],
-          updatedAt: u.updatedAt || null,
-        }
-      })
-      // ordena por updatedAt desc, fallback nome
-      list.sort((a, b) => {
-        const A = a.updatedAt?.toMillis?.() ?? (a.updatedAt?.seconds ? a.updatedAt.seconds * 1000 : 0)
-        const B = b.updatedAt?.toMillis?.() ?? (b.updatedAt?.seconds ? b.updatedAt.seconds * 1000 : 0)
-        if (B !== A) return B - A
-        return (a.name || '').localeCompare(b.name || '')
-      })
-      setRows(list)
-    } catch (e: any) {
-      setError(e?.message || 'Erro ao carregar avaliadores')
-    } finally {
-      setLoading(false)
-    }
+  // Dialog CSV
+  const [csvOpen, setCsvOpen] = useState(false)
+  const [csvText, setCsvText] = useState('')
+  const [csvFileName, setCsvFileName] = useState<string | null>(null)
+  const [importing, setImporting] = useState(false)
+  const [importLog, setImportLog] = useState<string[]>([])
+
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      setLoading(true); setError(null)
+      try {
+        const qRef = query(collection(db, 'profiles'), orderBy('displayName', 'asc'))
+        const snap = await getDocs(qRef)
+        const arr: Profile[] = snap.docs.map(d => {
+          const data = d.data() as any
+          return {
+            uid: d.id,
+            email: data.email,
+            displayName: data.displayName || '',
+            role: data.role || 'evaluator',
+            active: data.active !== false,
+            updatedAt: data.updatedAt
+          }
+        })
+        if (alive) setProfiles(arr)
+      } catch (e: any) {
+        if (alive) setError(e?.message || 'Falha ao carregar avaliadores.')
+      } finally {
+        if (alive) setLoading(false)
+      }
+    })()
+    return () => { alive = false }
   }, [])
 
-  useEffect(() => { load() }, [load])
-
   const filtered = useMemo(() => {
-    const term = normalize(q)
-    if (!term) return rows
-    return rows.filter(r =>
-      normalize(r.name || '').includes(term) ||
-      normalize(r.email || '').includes(term)
+    const t = filter.trim().toLowerCase()
+    if (!t) return profiles
+    return profiles.filter(p =>
+      (p.displayName || '').toLowerCase().includes(t) ||
+      (p.email || '').toLowerCase().includes(t)
     )
-  }, [rows, q])
+  }, [profiles, filter])
 
-  const handleNew = () => nav('/admin/evaluators/new')
-  const handleEdit = (id: string) => nav(`/admin/evaluators/${encodeURIComponent(id)}/edit`)
-
-  const handleDelete = async () => {
-    if (!confirmId) return
+  const handleToggleActive = async (p: Profile, next: boolean) => {
     try {
-      await deleteDoc(doc(db, 'users', confirmId))
-      setRows(prev => prev.filter(r => r.id !== confirmId))
-      setFeedback({ type: 'success', text: 'Avaliador removido com sucesso.' })
+      await updateDoc(doc(db, 'profiles', p.uid), { active: next, updatedAt: new Date() as any })
+      // compat com /users
+      await setDoc(doc(db, 'users', p.email.toLowerCase()), {
+        email: p.email,
+        name: p.displayName || '',
+        role: p.role || 'evaluator',
+        active: next,
+        updatedAt: new Date() as any
+      }, { merge: true })
+      setProfiles(s => s.map(it => it.uid === p.uid ? { ...it, active: next } : it))
     } catch (e: any) {
-      setFeedback({ type: 'error', text: e?.message || 'Falha ao remover avaliador.' })
+      alert('Falha ao atualizar: ' + (e?.message || 'erro'))
+    }
+  }
+
+  // ---------- Importação em lote ----------
+  const handlePickFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0]
+    if (!f) return
+    setCsvFileName(f.name)
+    const reader = new FileReader()
+    reader.onload = () => setCsvText(String(reader.result || ''))
+    reader.readAsText(f, 'utf-8')
+  }
+
+  const runImport = async () => {
+    const rows = parseCSV(csvText)
+    if (!rows.length) {
+      alert('CSV vazio ou inválido. Use: Nome,Email,Senha')
+      return
+    }
+    setImporting(true)
+    setImportLog([])
+
+    try {
+      // Instância secundária para não afetar o login do admin
+      const primary = getAuthPrimary()
+      const appName = 'admin-bulk'
+      const secondaryApp = getApps().find(a => a.name === appName) ||
+        initializeApp(primary.app.options, appName)
+      const secondaryAuth = getAuthSecondary(secondaryApp)
+
+      for (const [i, row] of rows.entries()) {
+        const idx = i + 1
+        try {
+          // cria auth user
+          const cred = await createUserWithEmailAndPassword(secondaryAuth, row.email, row.password)
+          await updateProfile(cred.user, { displayName: row.name })
+          // grava perfil
+          await setDoc(doc(db, 'profiles', cred.user.uid), {
+            uid: cred.user.uid,
+            email: row.email.toLowerCase(),
+            displayName: row.name,
+            role: 'evaluator',
+            active: true,
+            updatedAt: new Date() as any
+          }, { merge: true })
+          // compat: /users
+          await setDoc(doc(db, 'users', row.email.toLowerCase()), {
+            email: row.email.toLowerCase(),
+            name: row.name,
+            role: 'evaluator',
+            active: true,
+            updatedAt: new Date() as any
+          }, { merge: true })
+
+          setImportLog(s => [...s, `✔ [${idx}] ${row.email} criado`])
+        } catch (e: any) {
+          setImportLog(s => [...s, `✖ [${idx}] ${row.email} — ${e?.message || 'erro'}`])
+        }
+      }
+
+      // encerra sessão da instância secundária
+      await signOut(secondaryAuth)
+      if (getApps().find(a => a.name === appName)) await deleteApp(secondaryApp)
+
+      // reload
+      const snap = await getDocs(query(collection(db, 'profiles'), orderBy('displayName', 'asc')))
+      setProfiles(snap.docs.map(d => ({ uid: d.id, ...(d.data() as any) })))
     } finally {
-      setConfirmId(null)
+      setImporting(false)
     }
   }
 
   return (
     <Box>
-      <Stack direction={{ xs: 'column', md: 'row' }} alignItems={{ xs: 'flex-start', md: 'center' }} justifyContent="space-between" gap={2} mb={2}>
+      <Stack direction={{ xs: 'column', sm: 'row' }} gap={2} mb={2} alignItems={{ xs: 'stretch', sm: 'center' }}>
         <Typography variant="h5" fontWeight={800}>Avaliadores</Typography>
-        <Stack direction="row" gap={1}>
-          <TextField
-            size="small"
-            placeholder="Buscar por nome ou e-mail…"
-            value={q}
-            onChange={e => setQ(e.target.value)}
-          />
-          <Button startIcon={<AddIcon />} variant="contained" onClick={handleNew}>Novo Avaliador</Button>
-        </Stack>
+        <Box flex={1} />
+        <TextField size="small" placeholder="Buscar por nome ou e-mail" value={filter} onChange={e => setFilter(e.target.value)} />
+        <Button variant="contained" startIcon={<CloudUploadIcon />} onClick={() => setCsvOpen(true)}>
+          Importar CSV
+        </Button>
       </Stack>
 
       {loading && <LinearProgress sx={{ mb: 2 }} />}
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-      {feedback && <Alert severity={feedback.type} sx={{ mb: 2 }}>{feedback.text}</Alert>}
 
-      {!loading && !error && filtered.length === 0 && (
-        <Alert severity="info">Nenhum avaliador encontrado.</Alert>
-      )}
-
-      <Grid container spacing={2}>
-        {filtered.map(u => (
-          <Grid key={u.id} item xs={12} md={6} lg={4}>
-            <Card variant="outlined">
-              <CardContent>
-                <Stack spacing={0.5}>
-                  <Typography variant="h6" fontWeight={700} noWrap>
-                    {u.name || (u.email || 'Sem nome')}
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary">
-                    {u.email || '—'}
-                  </Typography>
-                  <Stack direction="row" gap={1} flexWrap="wrap" mt={0.5}>
-                    <Chip size="small" label={u.role === 'admin' ? 'Admin' : 'Avaliador'} color={u.role === 'admin' ? 'primary' : 'default'} />
-                    <Chip size="small" label={u.active ? 'Ativo' : 'Inativo'} color={u.active ? 'success' : 'warning'} />
-                    {(u.categorias || []).map((c) => (
-                      <Chip key={c} size="small" label={c} />
-                    ))}
-                  </Stack>
-                </Stack>
-              </CardContent>
-              <CardActions sx={{ justifyContent: 'space-between', px: 2, pb: 2 }}>
-                <Stack direction="row" gap={1}>
-                  <Tooltip title="Editar">
-                    <IconButton onClick={() => handleEdit(u.id)}><EditIcon /></IconButton>
-                  </Tooltip>
-                  <Tooltip title="Excluir">
-                    <IconButton color="error" onClick={() => setConfirmId(u.id)}><DeleteIcon /></IconButton>
-                  </Tooltip>
-                </Stack>
-                <Button size="small" onClick={() => handleEdit(u.id)}>Abrir</Button>
-              </CardActions>
-            </Card>
-          </Grid>
+      <Stack gap={2}>
+        {filtered.map(p => (
+          <Card key={p.uid} variant="outlined">
+            <CardContent>
+              <Stack direction="row" alignItems="center" gap={2} flexWrap="wrap">
+                <Typography variant="subtitle1" fontWeight={700}>{p.displayName || '—'}</Typography>
+                <Typography variant="body2" color="text.secondary">{p.email}</Typography>
+                <Chip size="small" label={p.role === 'admin' ? 'Admin' : 'Avaliador'} />
+                <Chip size="small" color={p.active !== false ? 'success' : 'default'} label={p.active !== false ? 'Ativo' : 'Desativado'} />
+              </Stack>
+            </CardContent>
+            <CardActions sx={{ justifyContent: 'flex-end' }}>
+              <Tooltip title={p.active !== false ? 'Desativar' : 'Ativar'}>
+                <IconButton onClick={() => handleToggleActive(p, !(p.active !== false))} color={p.active !== false ? 'warning' : 'success'}>
+                  {p.active !== false ? <BlockIcon /> : <HowToRegIcon />}
+                </IconButton>
+              </Tooltip>
+              {/* Excluir totalmente (opcional) — se quiser, implemente regras extras de segurança
+              <Tooltip title="Remover">
+                <IconButton color="error" onClick={() => alert('Remoção total: implementar se necessário')}>
+                  <DeleteIcon />
+                </IconButton>
+              </Tooltip> */}
+            </CardActions>
+          </Card>
         ))}
-      </Grid>
+      </Stack>
 
-      <Dialog open={!!confirmId} onClose={() => setConfirmId(null)}>
-        <DialogTitle>Remover avaliador</DialogTitle>
-        <DialogContent>
-          <DialogContentText>Tem certeza que deseja remover este avaliador? Esta ação não pode ser desfeita.</DialogContentText>
+      {/* Dialog Importação */}
+      <Dialog open={csvOpen} onClose={() => setCsvOpen(false)} fullWidth maxWidth="md">
+        <DialogTitle>Importar avaliadores via CSV</DialogTitle>
+        <DialogContent dividers>
+          <Stack gap={2}>
+            <Alert severity="info">
+              Formato: <strong>Nome,Email,Senha</strong> (uma linha por avaliador).<br />
+              Exemplo:<br />
+              João da Silva,joao@ifpr.edu.br,senha123<br />
+              Maria Souza,maria@ifpr.edu.br,senh@456
+            </Alert>
+
+            <Stack direction="row" gap={1} alignItems="center">
+              <Button component="label" variant="outlined" startIcon={<UploadFileIcon />}>
+                Carregar CSV
+                <input type="file" accept=".csv,text/csv,text/plain" hidden onChange={handlePickFile} />
+              </Button>
+              <Typography variant="body2" color="text.secondary">{csvFileName || 'Nenhum arquivo selecionado'}</Typography>
+            </Stack>
+
+            <TextField
+              label="Conteúdo CSV"
+              value={csvText}
+              onChange={e => setCsvText(e.target.value)}
+              fullWidth multiline minRows={8}
+            />
+
+            {!!importLog.length && (
+              <Box sx={{ bgcolor: '#0b1020', color: '#d6e2ff', p: 2, borderRadius: 1, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace', fontSize: 13 }}>
+                {importLog.map((l, i) => <div key={i}>{l}</div>)}
+              </Box>
+            )}
+          </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setConfirmId(null)}>Cancelar</Button>
-          <Button variant="contained" color="error" onClick={handleDelete}>Remover</Button>
+          <Button onClick={() => setCsvOpen(false)}>Fechar</Button>
+          <Button onClick={runImport} variant="contained" disabled={importing}>Importar</Button>
         </DialogActions>
       </Dialog>
     </Box>

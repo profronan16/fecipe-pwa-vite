@@ -9,6 +9,7 @@ import {
   setDoc,
   updateDoc,
 } from 'firebase/firestore'
+
 import { db } from '@services/firebase'
 
 export type UserRecord = {
@@ -79,4 +80,25 @@ export async function patchUser(email: string, patch: Partial<UserRecord>) {
     ...patch,
     updatedAt: new Date(),
   } as any)
+}
+
+
+export async function getProfileByUid(uid: string) {
+  const snap = await getDoc(doc(db, 'profiles', uid))
+  return snap.exists() ? (snap.data() as any) : null
+}
+
+export async function listEvaluators() {
+  // busca por profiles com role=evaluator
+  const qs = await getDocs(collection(db, 'profiles'))
+  const rows: any[] = []
+  qs.forEach(d => {
+    const x = d.data() as any
+    if (x.role === 'evaluator') rows.push({ uid: d.id, ...x })
+  })
+  return rows
+}
+
+export async function toggleEvaluatorActive(uid: string, active: boolean) {
+  await updateDoc(doc(db, 'profiles', uid), { active })
 }

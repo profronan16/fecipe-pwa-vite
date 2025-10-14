@@ -1,4 +1,5 @@
 // src/screens/Work/WorkListScreen.tsx
+// (idêntica à última que você colou, com o botão maior/primário)
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Box, TextField, ToggleButtonGroup, ToggleButton,
@@ -18,7 +19,6 @@ type Categoria = typeof CATEGORIAS[number] | 'Todos'
 const SUBCATEGORIAS = ['Ensino', 'Extensão', 'Pesquisa/Inovação'] as const
 type Subcategoria = typeof SUBCATEGORIAS[number] | ''
 
-// >>> Atualizado: inclui "Servidor" nas categorias corretas
 const TIPOS_FEIRA = ['Fundamental', 'Ensino Médio', 'Superior'] as const
 const TIPOS_COMORAL = ['Ensino Médio', 'Superior', 'Pós-graduação', 'Servidor'] as const
 const TIPOS_BANNER = ['Ensino Médio', 'Superior', 'Servidor'] as const
@@ -32,17 +32,11 @@ function optionsTipoFor(categoria: Categoria): readonly string[] {
 }
 
 const normalize = (s: string) =>
-  String(s ?? '')
-    .replace(/\u00A0/g, ' ')
-    .trim()
-    .normalize('NFD')
-    .replace(/\p{Diacritic}/gu, '')
-    .toLowerCase()
+  String(s ?? '').replace(/\u00A0/g, ' ').trim().normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase()
 
 export default function WorkListScreen() {
   const { user, role } = useAuth()
   const nav = useNavigate()
-
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -60,24 +54,17 @@ export default function WorkListScreen() {
 
   const load = useCallback(async () => {
     if (!user?.email) return
-    setLoading(true)
-    setError(null)
+    setLoading(true); setError(null)
     try {
       const emailLower = user.email.toLowerCase()
       const data = await listProjectsForEvaluator(emailLower, role)
       setProjects(data)
 
-      const evalSnap = await getDocs(
-        query(collection(db, 'avaliacoes'), where('avaliadorId', '==', user.uid))
-      )
+      const evalSnap = await getDocs(query(collection(db, 'avaliacoes'), where('avaliadorId', '==', user.uid)))
       const done = new Set<string>(evalSnap.docs.map(d => (d.data() as any).trabalhoId))
       setEvaluatedIds(done)
 
-      const cats = Array.from(
-        new Set(
-          data.map(p => (p.categoria && CATEGORIAS.includes(p.categoria as any) ? p.categoria : 'Sem categoria'))
-        )
-      ).sort() as Categoria[]
+      const cats = Array.from(new Set(data.map(p => (p.categoria && CATEGORIAS.includes(p.categoria as any) ? p.categoria : 'Sem categoria')))).sort() as Categoria[]
       setCategories(['Todos', ...cats])
     } catch (e: any) {
       setError(e?.message || 'Erro ao carregar trabalhos')
@@ -92,28 +79,12 @@ export default function WorkListScreen() {
 
   const filtered = useMemo(() => {
     let list = [...projects]
-
-    if (hideEvaluated) {
-      list = list.filter(p => !evaluatedIds.has(p.id))
-    }
-
-    if (selectedCategory !== 'Todos') {
-      list = list.filter(p => (p.categoria || '') === selectedCategory)
-    }
-
-    if ((selectedCategory === 'Comunicação Oral' || selectedCategory === 'Banner') && selectedSub) {
+    if (hideEvaluated) list = list.filter(p => !evaluatedIds.has(p.id))
+    if (selectedCategory !== 'Todos') list = list.filter(p => (p.categoria || '') === selectedCategory)
+    if ((selectedCategory === 'Comunicação Oral' || selectedCategory === 'Banner') && selectedSub)
       list = list.filter(p => (p.subcategoria || '') === selectedSub)
-    }
-
-    if (
-      (selectedCategory === 'Feira de Ciências' ||
-        selectedCategory === 'Comunicação Oral' ||
-        selectedCategory === 'Banner') &&
-      selectedTipo
-    ) {
+    if (['Feira de Ciências', 'Comunicação Oral', 'Banner'].includes(String(selectedCategory)) && selectedTipo)
       list = list.filter(p => (p.tipo || '') === selectedTipo)
-    }
-
     if (searchTerm.trim()) {
       const t = normalize(searchTerm)
       list = list.filter(p =>
@@ -122,7 +93,6 @@ export default function WorkListScreen() {
           : (Array.isArray(p.autores) ? p.autores : []).some(a => normalize(a).includes(t))
       )
     }
-
     return list
   }, [projects, evaluatedIds, hideEvaluated, selectedCategory, selectedSub, selectedTipo, searchTerm, mode])
 
@@ -131,34 +101,17 @@ export default function WorkListScreen() {
 
   return (
     <Box>
+      {/* filtros */}
       <Stack direction={{ xs: 'column', md: 'row' }} gap={2} mb={2} alignItems={{ xs: 'stretch', md: 'center' }}>
-        <TextField
-          fullWidth
-          placeholder={mode === 'titulo' ? 'Buscar por título...' : 'Buscar por autor...'}
-          value={searchTerm}
-          onChange={e => setSearchTerm(e.target.value)}
-        />
-        <ToggleButtonGroup
-          exclusive
-          value={mode}
-          onChange={(_, v) => v && setMode(v)}
-        >
+        <TextField fullWidth placeholder={mode === 'titulo' ? 'Buscar por título...' : 'Buscar por autor...'} value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+        <ToggleButtonGroup exclusive value={mode} onChange={(_, v) => v && setMode(v)}>
           <ToggleButton value="titulo">Título</ToggleButton>
           <ToggleButton value="autor">Autor</ToggleButton>
         </ToggleButtonGroup>
 
         <FormControl sx={{ minWidth: 200 }}>
           <InputLabel>Categoria</InputLabel>
-          <Select
-            label="Categoria"
-            value={selectedCategory}
-            onChange={e => {
-              const v = e.target.value as Categoria
-              setSelectedCategory(v)
-              setSelectedSub('')
-              setSelectedTipo('')
-            }}
-          >
+          <Select label="Categoria" value={selectedCategory} onChange={e => { const v = e.target.value as Categoria; setSelectedCategory(v); setSelectedSub(''); setSelectedTipo('') }}>
             {categories.map(c => (<MenuItem key={c} value={c}>{c}</MenuItem>))}
           </Select>
         </FormControl>
@@ -166,11 +119,7 @@ export default function WorkListScreen() {
         {(selectedCategory === 'Comunicação Oral' || selectedCategory === 'Banner') && (
           <FormControl sx={{ minWidth: 200 }}>
             <InputLabel>Subcategoria</InputLabel>
-            <Select
-              label="Subcategoria"
-              value={selectedSub}
-              onChange={e => setSelectedSub(e.target.value as Subcategoria)}
-            >
+            <Select label="Subcategoria" value={selectedSub} onChange={e => setSelectedSub(e.target.value as Subcategoria)}>
               <MenuItem value="">Todas</MenuItem>
               {['Ensino', 'Extensão', 'Pesquisa/Inovação'].map(s => (<MenuItem key={s} value={s}>{s}</MenuItem>))}
             </Select>
@@ -180,11 +129,7 @@ export default function WorkListScreen() {
         {(selectedCategory === 'Feira de Ciências' || selectedCategory === 'Comunicação Oral' || selectedCategory === 'Banner') && (
           <FormControl sx={{ minWidth: 200 }}>
             <InputLabel>Tipo</InputLabel>
-            <Select
-              label="Tipo"
-              value={selectedTipo}
-              onChange={e => setSelectedTipo(e.target.value as Tipo)}
-            >
+            <Select label="Tipo" value={selectedTipo} onChange={e => setSelectedTipo(e.target.value as Tipo)}>
               <MenuItem value="">Todos</MenuItem>
               {tipoOptions.map(t => (<MenuItem key={t} value={t}>{t}</MenuItem>))}
             </Select>
@@ -192,11 +137,7 @@ export default function WorkListScreen() {
         )}
       </Stack>
 
-      <FormControlLabel
-        control={<Checkbox checked={hideEvaluated} onChange={(e) => setHideEvaluated(e.target.checked)} />}
-        label="Ocultar já avaliados"
-        sx={{ mb: 2 }}
-      />
+      <FormControlLabel control={<Checkbox checked={hideEvaluated} onChange={(e) => setHideEvaluated(e.target.checked)} />} label="Ocultar já avaliados" sx={{ mb: 2 }} />
 
       {!filtered.length ? (
         <Alert severity="info">Nenhum trabalho disponível para você.</Alert>
@@ -206,41 +147,29 @@ export default function WorkListScreen() {
             const already = evaluatedIds.has(item.id)
             const isAll = (item.assignedEvaluators?.length === 1 && item.assignedEvaluators[0] === 'ALL') || !item.assignedEvaluators?.length
             return (
-              <Card key={item.id} variant="outlined" sx={{ opacity: already ? 0.7 : 1 }}>
+              <Card key={item.id} variant="outlined" sx={{ opacity: already ? 0.8 : 1 }}>
                 <CardContent>
                   <Stack spacing={0.75}>
-                    <Typography variant="subtitle1" fontWeight={700}>{item.titulo || 'Sem título'}</Typography>
-
+                    <Typography variant="h6" fontWeight={700}>{item.titulo || 'Sem título'}</Typography>
                     <Stack direction="row" gap={1} flexWrap="wrap">
                       {item.categoria && <Chip size="small" label={item.categoria} />}
                       {item.subcategoria && <Chip size="small" label={item.subcategoria} />}
                       {item.tipo && <Chip size="small" label={item.tipo} />}
                       {item.area && <Chip size="small" label={item.area} />}
                     </Stack>
-
-                    {item.apresentador && (
-                      <Typography variant="body2" color="text.secondary">
-                        <strong>Apresentador(a):</strong> {item.apresentador}
-                      </Typography>
-                    )}
-
-                    {!!item.autores?.length && (
-                      <Typography variant="body2" color="text.secondary">
-                        <strong>Autores:</strong> {item.autores.join('; ')}
-                      </Typography>
-                    )}
-
+                    {item.apresentador && <Typography variant="body2" color="text.secondary"><strong>Apresentador(a):</strong> {item.apresentador}</Typography>}
+                    {!!item.autores?.length && <Typography variant="body2" color="text.secondary"><strong>Autores:</strong> {item.autores.join('; ')}</Typography>}
                     <Typography variant="caption" color="text.secondary">
                       {isAll ? 'Visível a todos os avaliadores' : 'Restrito a avaliadores vinculados'}
                     </Typography>
                   </Stack>
                 </CardContent>
-                <CardActions sx={{ justifyContent: 'flex-end' }}>
+                <CardActions sx={{ justifyContent: 'flex-end', p: 2 }}>
                   <Button
-                    variant="contained"
-                    onClick={() =>
-                      nav(`/evaluator/evaluate/${item.id}?titulo=${encodeURIComponent(item.titulo || '')}`)
-                    }
+                    size="large"
+                    variant={already ? 'outlined' : 'contained'}
+                    onClick={() => nav(`/evaluator/evaluate/${item.id}?titulo=${encodeURIComponent(item.titulo || '')}`)}
+                    sx={{ minWidth: 200, fontWeight: 700 }}
                   >
                     {already ? 'Reabrir avaliação' : 'Avaliar'}
                   </Button>
