@@ -1,131 +1,95 @@
-// aggregator/src/server.ts
 import express from 'express'
 import cors from 'cors'
-import bodyParser from 'body-parser'
+import helmet from 'helmet'
+import morgan from 'morgan'
 import { recomputeAll } from './worker'
 
-// Firebase Admin
-import admin from 'firebase-admin'
+// Carrega .env.* conforme NODE_ENV (development/production/test)
+import dotenv from 'dotenv'
+const envFile =
+  process.env.NODE_ENV === 'production'
+    ? '.env.production'
+    : process.env.NODE_ENV === 'test'
+    ? '.env.test'
+    : '.env.development'
+dotenv.config({ path: envFile })
 
-// inicializa Admin se ainda não
-try {
-  if (!admin.apps.length) {
-    admin.initializeApp({
-      credential: admin.credential.applicationDefault(),
-    })
-  }
-} catch {}
-
-const app = express()
+// --------- ENV ----------
 const PORT = Number(process.env.PORT || 8787)
+const TOKEN = (process.env.AGGREGATOR_TOKEN || '').trim()
 
-const allowed = (process.env.APP_ORIGIN || '')
+// CORS: lista separada por vírgula
+// Ex.: http://localhost:5173,https://ifcoding.com.br
+const ORIGINS = (process.env.AGG_ALLOWED_ORIGINS || '')
   .split(',')
   .map(s => s.trim())
   .filter(Boolean)
 
-app.use((_, res, next) => {
-  res.setHeader('Vary', 'Origin')
-  next()
-})
+// como fallback, se não houver AGG_ALLOWED_ORIGINS, libera a própria origem padrão
+if (!ORIGINS.length && process.env.APP_ORIGIN) {
+  ORIGINS.push(process.env.APP_ORIGIN)
+}
+
+// --------- APP ----------
+const app = express()
+
+app.use(helmet({
+  contentSecurityPolicy: false,
+}))
 
 app.use(cors({
-  origin(origin, cb) {
-    if (!origin) return cb(null, false)
-    if (allowed.includes(origin)) return cb(null, origin)
-    return cb(null, false)
+  origin: (origin, cb) => {
+    // requisições sem Origin (curl, health checks) -> permite
+    if (!origin) return cb(null, true)
+    if (ORIGINS.includes(origin)) return cb(null, true)
+    return cb(new Error(`Origin not allowed by CORS: ${origin}`))
   },
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Api-Key'],
-  optionsSuccessStatus: 204,
 }))
 
-app.use(bodyParser.json({ limit: '2mb' }))
+app.use(express.json())
+app.use(morgan('tiny'))
 
+// Auth simples por token (header Authorization: Bearer <token> ou X-Api-Key: <token>)
+function requireToken(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (!TOKEN) return res.status(500).json({ error: 'Missing AGGREGATOR_TOKEN on server' })
+  const h = req.header('authorization') || ''
+  const key = req.header('x-api-key') || ''
+  const candidate = h.toLowerCase().startsWith('bearer ') ? h.slice(7).trim() : key.trim()
+  if (candidate && candidate === TOKEN) return next()
+  return res.status(401).json({ error: 'unauthorized' })
+}
+
+// Healthcheck
 app.get('/healthz', (_req, res) => {
-  res.status(200).json({ ok: true, ts: Date.now(), origins: allowed })
+  res.status(200).json({
+    ok: true,
+    env: process.env.NODE_ENV || 'development',
+    port: PORT,
+    allow: ORIGINS,
+  })
 })
 
-app.post('/recompute', async (req, res) => {
+// Recompute (POST). Use ?debug=1 para logs detalhados no console
+app.post('/recompute', requireToken, async (req, res) => {
   try {
-    const token = process.env.AGGREGATOR_TOKEN
-    const auth = req.get('Authorization') || req.get('X-Api-Key') || ''
-    if (token && !auth.includes(String(token))) {
-      return res.status(401).json({ ok: false, error: 'unauthorized' })
-    }
-    const debug = String(req.query.debug || '') === '1'
-    await recomputeAll({ debug })
+    const debug = String(req.query.debug || '').trim() === '1'
+    if (debug) process.env.DEBUG_AGG_LOG = '1'
+    await recomputeAll(debug)
     res.json({ ok: true })
-  } catch (e: any) {
-    res.status(500).json({ ok: false, error: e?.message || 'error' })
+  } catch (err: any) {
+    console.error('[recompute] error:', err)
+    res.status(500).json({ ok: false, error: String(err?.message || err) })
   }
 })
 
-/**
- * Admin: criar avaliadores em lote
- * body: { evaluators: Array<{ name: string; email: string; password: string }> }
- */
-app.post('/admin/evaluators/bulk', async (req, res) => {
-  try {
-    const token = process.env.AGGREGATOR_TOKEN
-    const auth = req.get('Authorization') || req.get('X-Api-Key') || ''
-    if (token && !auth.includes(String(token))) {
-      return res.status(401).json({ ok: false, error: 'unauthorized' })
-    }
-
-    const items = Array.isArray(req.body?.evaluators) ? req.body.evaluators : []
-    if (!items.length) return res.status(400).json({ ok: false, error: 'missing evaluators' })
-
-    const results: Array<{ email: string; uid?: string; error?: string }> = []
-
-    for (const row of items) {
-      const name = String(row.name || '').trim()
-      const email = String(row.email || '').trim().toLowerCase()
-      const password = String(row.password || '').trim()
-
-      if (!name || !email || password.length < 6) {
-        results.push({ email, error: 'invalid row' })
-        continue
-      }
-
-      try {
-        // cria usuário no Auth
-        const user = await admin.auth().createUser({
-          email, password, displayName: name, disabled: false,
-        })
-
-        // grava perfil em /profiles/{uid}
-        const db = admin.firestore()
-        await db.collection('profiles').doc(user.uid).set({
-          uid: user.uid,
-          displayName: name,
-          email,
-          role: 'evaluator',
-          active: true,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        }, { merge: true })
-
-        // opcional: índice por e-mail em /users (mantendo seu padrão)
-        await db.collection('users').doc(email).set({
-          email, name, role: 'evaluator', active: true,
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        }, { merge: true })
-
-        results.push({ email, uid: user.uid })
-      } catch (err: any) {
-        results.push({ email, error: err?.message || 'createUser failed' })
-      }
-    }
-
-    res.json({ ok: true, results })
-  } catch (e: any) {
-    res.status(500).json({ ok: false, error: e?.message || 'error' })
-  }
+// 404 padrão
+app.use((_req, res) => {
+  res.status(404).send('Not Found')
 })
 
 app.listen(PORT, () => {
   console.log(`[aggregator] listening on http://localhost:${PORT}`)
-  console.log(`• POST /recompute  (use ?debug=1)`)
-  console.log(`• POST /admin/evaluators/bulk  (auth via AGGREGATOR_TOKEN)`)
+  console.log('• POST /recompute  (use ?debug=1 para logs)')
 })

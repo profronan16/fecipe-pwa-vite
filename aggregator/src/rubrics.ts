@@ -1,119 +1,82 @@
 // aggregator/src/rubrics.ts
-// Define as rúbricas (critérios e pesos) por categoria/subcategoria/tipo
-// Edital:
-// - Ensino, Pesquisa/Inovação, Extensão, Comunicação Oral e Banner => 9 critérios
-//   Pesos: [0.9, 0.8, 0.7, 0.6, 0.6, 0.4, 0.4, 0.3, 0.3]
-// - IFTECH e Feira de Ciências => 6 critérios
-//   Pesos: [0.75, 1, 0.5, 1, 0.75, 1]
+// -----------------------------------------------------------------------------
+// Resolução de rúbrica (grupo estatístico), critérios e pesos.
+// Mantém a fórmula existente; só garante o agrupamento correto por categoria.
+// -----------------------------------------------------------------------------
 
-export type CriterionId = string
+export type RubricId =
+  | 'iftech'
+  | 'feira'
+  | 'comoral'
+  | 'banner-ensino'
+  | 'banner-extensao'
+  | 'banner-pesquisa'
 
-export type Rubric = {
-  id: string
-  label: string
-  criteria: CriterionId[]                 // ordem dos critérios
-  weights: Record<CriterionId, number>    // pesos por critério
-  z: number                               // constante de escala (2.5)
+export type CriterionId = 'C1'|'C2'|'C3'|'C4'|'C5'|'C6'|'C7'|'C8'|'C9'
+
+/** Quantos critérios cada rúbrica possui */
+export function criteriaFor(rubric: RubricId): CriterionId[] {
+  if (rubric === 'iftech' || rubric === 'feira') return ['C1','C2','C3','C4','C5','C6']
+  return ['C1','C2','C3','C4','C5','C6','C7','C8','C9']
 }
 
-// ---------- Helpers ----------
-function normalize(str?: string): string {
-  return (str || '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '') // remove acentos
-    .toUpperCase()
+/** Pesos por rúbrica (tabelas que você forneceu) */
+export function weightsFor(rubric: RubricId): Record<CriterionId, number> {
+  if (rubric === 'iftech' || rubric === 'feira') {
+    // 6 critérios — Anexos V e VI
+    return { C1: 0.75, C2: 1, C3: 0.5, C4: 1, C5: 0.75, C6: 1, C7: 0, C8: 0, C9: 0 }
+  }
+  // 9 critérios — Anexos I a IV
+  return { C1: 0.9, C2: 0.8, C3: 0.7, C4: 0.6, C5: 0.6, C6: 0.4, C7: 0.4, C8: 0.3, C9: 0.3 }
+}
+
+/** Normalização básica de strings (sem acentos / caixa baixa) */
+function norm(s: string | null | undefined): string {
+  return String(s ?? '')
+    .replace(/\u00A0/g, ' ')
     .trim()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLowerCase()
 }
-
-// ---------- RÚBRICAS ----------
-
-// 6 critérios (IFTECH / Feira)
-const SIX_CRITERIA: CriterionId[] = ['C1','C2','C3','C4','C5','C6']
-const SIX_WEIGHTS: Record<CriterionId, number> = {
-  C1: 0.75, C2: 1, C3: 0.5, C4: 1, C5: 0.75, C6: 1,
-}
-
-// 9 critérios (Ensino / Pesquisa / Extensão / Com. Oral / Banner)
-const NINE_CRITERIA: CriterionId[] = ['C1','C2','C3','C4','C5','C6','C7','C8','C9']
-const NINE_WEIGHTS: Record<CriterionId, number> = {
-  C1: 0.9, C2: 0.8, C3: 0.7, C4: 0.6, C5: 0.6, C6: 0.4, C7: 0.4, C8: 0.3, C9: 0.3,
-}
-
-export const RUBRICS: Rubric[] = [
-  {
-    id: 'IFTECH',
-    label: 'IFTECH (6 critérios)',
-    criteria: SIX_CRITERIA,
-    weights: SIX_WEIGHTS,
-    z: 2.5,
-  },
-  {
-    id: 'FEIRA',
-    label: 'Feira de Ciências (6 critérios)',
-    criteria: SIX_CRITERIA,
-    weights: SIX_WEIGHTS,
-    z: 2.5,
-  },
-  {
-    id: 'ANEXO_I_IV',
-    label: 'Ensino / Pesquisa / Extensão / Comunicação Oral / Banner (9 critérios)',
-    criteria: NINE_CRITERIA,
-    weights: NINE_WEIGHTS,
-    z: 2.5,
-  },
-]
-
-// ---------- Resolver da rúbrica a partir do doc do trabalho ----------
 
 /**
- * Retorna a rúbrica adequada para um trabalho, com base principalmente em `categoria`.
- * - IFTECH -> 'IFTECH'
- * - FEIRA DE CIENCIAS -> 'FEIRA'
- * - COMUNICACAO ORAL, BANNER, ENSINO, PESQUISA, EXTENSAO -> 'ANEXO_I_IV' (9 critérios)
- * Fallback: 'ANEXO_I_IV'
+ * Resolve a rúbrica (id) do projeto:
+ * - IFTECH → "iftech" (6)
+ * - Feira de Ciências → "feira" (6)
+ * - Comunicação Oral → "comoral" (9)
+ * - Banner → separa por subcategoria (9): ensino / extensao / pesquisa
  */
-export function resolveRubricIdFromWork(work: any): Rubric {
-  const catN = normalize(work?.categoria)
-  const subcatN = normalize(work?.subcategoria)
-  const tipoN = normalize(work?.tipo)
+export function resolveRubricId(project: {
+  categoria?: string | null
+  subcategoria?: string | null
+}): RubricId {
+  const cat = norm(project.categoria)
+  const sub = norm(project.subcategoria)
 
-  // IFTECH (6)
-  if (catN.includes('IFTECH')) {
-    return RUBRICS.find(r => r.id === 'IFTECH')!
+  if (cat === 'iftech') return 'iftech'
+  if (cat === 'feira de ciencias' || cat === 'feira de ciencias' || cat === 'feira de ciências') return 'feira'
+  if (cat === 'comunicacao oral' || cat === 'comunicacao  oral' || cat === 'comunicação oral') return 'comoral'
+
+  if (cat === 'banner') {
+    if (sub.startsWith('ensino')) return 'banner-ensino'
+    if (sub.startsWith('extensao') || sub.startsWith('extensão')) return 'banner-extensao'
+    // qualquer coisa que remeta a pesquisa/inovação
+    return 'banner-pesquisa'
   }
 
-  // FEIRA DE CIÊNCIAS (6)
-  if (catN.includes('FEIRA')) {
-    return RUBRICS.find(r => r.id === 'FEIRA')!
-  }
-
-  // Comunicação Oral / Banner / Ensino / Pesquisa / Extensão (9)
-  if (
-    catN.includes('COMUNICACAO') ||
-    catN.includes('BANNER') ||
-    catN.includes('ENSINO') ||
-    catN.includes('PESQUISA') ||
-    catN.includes('INOVACAO') ||
-    catN.includes('EXTENSAO') ||
-    subcatN.includes('ENSINO') ||
-    subcatN.includes('PESQUISA') ||
-    subcatN.includes('INOVACAO') ||
-    subcatN.includes('EXTENSAO') ||
-    tipoN.includes('FUNDAMENTAL') ||
-    tipoN.includes('MEDIO') ||
-    tipoN.includes('SUPERIOR') ||
-    tipoN.includes('POS')
-  ) {
-    return RUBRICS.find(r => r.id === 'ANEXO_I_IV')!
-  }
-
-  // Fallback seguro: usar 9 critérios (mais comum para CO/Banner/Ensino/Pesquisa/Extensão)
-  return RUBRICS.find(r => r.id === 'ANEXO_I_IV')!
+  // fallback seguro (9 critérios) — evita quebrar caso venha um rótulo diferente
+  return 'comoral'
 }
 
-// Exporte também as constantes caso queira usar em testes
-export const RUBRIC_IDS = {
-  IFTECH: 'IFTECH',
-  FEIRA: 'FEIRA',
-  ANEXO_I_IV: 'ANEXO_I_IV',
-} as const
+/** Título amigável para logs/relatórios */
+export function rubricTitle(r: RubricId): string {
+  switch (r) {
+    case 'iftech': return 'IFTECH (6 critérios)'
+    case 'feira': return 'Feira de Ciências (6 critérios)'
+    case 'comoral': return 'Comunicação Oral (9 critérios)'
+    case 'banner-ensino': return 'Banner — Ensino (9 critérios)'
+    case 'banner-extensao': return 'Banner — Extensão (9 critérios)'
+    case 'banner-pesquisa': return 'Banner — Pesquisa/Inovação (9 critérios)'
+  }
+}

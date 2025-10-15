@@ -1,60 +1,19 @@
 // aggregator/src/worker.ts
-import 'dotenv/config'
-import { initializeApp } from 'firebase/app'
-import {
-  collection, getDocs, getFirestore, query, where, doc, setDoc,
-} from 'firebase/firestore'
-import { RUBRICS, resolveRubricIdFromWork, Rubric, CriterionId } from './rubrics'
+// -----------------------------------------------------------------------------
+// Recomputador de notas finais e estatísticas de rúbricas.
+// Usa @google-cloud/firestore (GOOGLE_APPLICATION_CREDENTIALS).
+// -----------------------------------------------------------------------------
 
-const app = initializeApp({
-  apiKey: process.env.FIREBASE_API_KEY!,
-  authDomain: process.env.FIREBASE_AUTH_DOMAIN!,
-  projectId: process.env.FIREBASE_PROJECT_ID!,
-  storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
-  appId: process.env.FIREBASE_APP_ID!,
-  measurementId: process.env.FIREBASE_MEASUREMENT_ID,
-})
-const db = getFirestore(app)
+import { Firestore, Timestamp } from '@google-cloud/firestore'
+import { criteriaFor, resolveRubricId, rubricTitle, weightsFor, type CriterionId, type RubricId } from './rubrics'
+import { fileURLToPath } from 'url';
 
-// ---------------- utils ----------------
-const EPS = 1e-9
-const round = (n: number, p = 6) => Math.round(n * 10 ** p) / 10 ** p
-const isDbg = () =>
-  process.env.DEBUG_AGG_LOG === '1' ||
-  process.argv.includes('--debug') ||
-  process.argv.includes('-d')
-const dlog = (...a: any[]) => { if (isDbg()) console.log(...a) }
-const dheader = (t: string) => { if (isDbg()) console.log(`\n================ ${t} ================`) }
-const dtable = (label: string, rows: any[]) => { if (isDbg()) { console.log(`\n${label}`); console.table(rows) } }
+const firestore = new Firestore()
 
-function parseMaybeNumber(v: any): number {
-  if (typeof v === 'number') return v
-  if (typeof v === 'string') {
-    const s = v.replace(',', '.').trim()
-    const n = Number(s)
-    return Number.isFinite(n) ? n : NaN
-  }
-  return NaN
-}
+const Z = 2.5 // constante de escala
+const DEBUG = process.env.DEBUG_AGG_LOG === '1' || process.argv.includes('--debug')
 
-function stdPopulation(values: number[]): number {
-  const vals = values.filter(v => Number.isFinite(v))
-  if (!vals.length) return 0
-  const mean = vals.reduce((a, b) => a + b, 0) / vals.length
-  const variance = vals.reduce((sum, v) => sum + (v - mean) ** 2, 0) / vals.length
-  return Math.sqrt(variance)
-}
-
-// ---------------- tipos ----------------
-type EvalDoc = {
-  trabalhoId: string
-  avaliadorId: string
-  criterios?: Array<{ id?: string; value?: any; [k: string]: any }>
-  notas?: any
-  scores?: any
-  [k: string]: any
-}
-type Work = {
+type WorkDoc = {
   id: string
   titulo?: string
   categoria?: string
@@ -63,192 +22,278 @@ type Work = {
   area?: string
 }
 
-// --------- parsing: mapeia avaliação → { C1: num, C2: num, ... } ----------
-function mapScoresFromEvaluation(e: EvalDoc, criteriaLen: number): Record<CriterionId, number> {
-  const out: Record<CriterionId, number> = {}
-  for (let i = 1; i <= criteriaLen; i++) out[`C${i}` as CriterionId] = 0
+type EvaluationDoc = {
+  id: string
+  trabalhoId: string
+  avaliadorId: string
+  criterios?: Array<{ id: string; value: number | null }>
+  notas?: Record<string, number | null>
+}
 
-  // formato “oficial” do seu banco: criterios: [{id:'c1', value:1.5}, ...]
-  if (Array.isArray(e.criterios) && e.criterios.length) {
-    for (const item of e.criterios) {
-      const idRaw = String(item?.id ?? '').trim().toLowerCase() // 'c1'
-      const val = parseMaybeNumber(item?.value)
-      const m = idRaw.match(/^c(\d+)$/)
-      if (m && Number(m[1]) >= 1) {
-        const key = `C${Number(m[1])}` as CriterionId
-        if (Number.isFinite(val)) out[key] = val
-      }
+// ------------------------ util numérica ------------------------
+
+function safeNum(x: any, def = 0): number {
+  const n = Number(x)
+  return Number.isFinite(n) ? n : def
+}
+
+function popStd(values: number[]): number {
+  if (!values.length) return 0
+  const mean = values.reduce((a,b)=>a+b,0) / values.length
+  const varPop = values.reduce((a,b)=>a + (b-mean)*(b-mean), 0) / values.length
+  return Math.sqrt(varPop)
+}
+
+// ------------------------ leitura Firestore ------------------------
+
+async function listWorks(): Promise<WorkDoc[]> {
+  const snap = await firestore.collection('trabalhos').get()
+  return snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }))
+}
+
+async function listEvaluationsByWork(workId: string): Promise<EvaluationDoc[]> {
+  const snap = await firestore.collection('avaliacoes')
+    .where('trabalhoId', '==', workId)
+    .get()
+  return snap.docs.map(d => ({ id: d.id, ...(d.data() as any) }))
+}
+
+// ------------------------ núcleo do cálculo ------------------------
+
+type PerCriterion = Record<CriterionId, number>
+type MaybePerCriterion = Partial<PerCriterion>
+
+function emptyPerCriterion(criteria: CriterionId[]): PerCriterion {
+  const o: any = {}
+  for (const c of criteria) o[c] = 0
+  return o
+}
+
+function addInto(target: MaybePerCriterion, criteria: CriterionId[], add: MaybePerCriterion) {
+  for (const c of criteria) {
+    target[c] = safeNum(target[c]) + safeNum(add[c])
+  }
+}
+
+function fromEvaluationToPerCriterion(ev: EvaluationDoc, criteria: CriterionId[]): MaybePerCriterion {
+  const out: MaybePerCriterion = {}
+  if (Array.isArray(ev.criterios) && ev.criterios.length) {
+    for (const it of ev.criterios) {
+      const id = String(it.id || '').toUpperCase() as CriterionId
+      if (criteria.includes(id)) out[id] = safeNum(it.value, 0)
+    }
+  } else if (ev.notas && typeof ev.notas === 'object') {
+    for (const [k,v] of Object.entries(ev.notas)) {
+      const id = String(k).toUpperCase() as CriterionId
+      if (criteria.includes(id)) out[id] = safeNum(v, 0)
     }
   }
-
-  // compat: objetos soltos (notas/scores/e)
-  const bags = [e.notas, e.scores, e]
-  for (const bag of bags) {
-    if (!bag || typeof bag !== 'object' || Array.isArray(bag)) continue
-    for (let i = 1; i <= criteriaLen; i++) {
-      const key = `C${i}` as CriterionId
-      if (out[key] !== 0) continue
-      const aliases = [
-        `C${i}`, `c${i}`, `${i}`,
-        `criterio${i}`, `crit${i}`, `nota${i}`,
-        `criterio_${i}`, `crit_${i}`, `nota_${i}`,
-      ]
-      for (const a of aliases) {
-        if (a in bag) {
-          const n = parseMaybeNumber(bag[a])
-          if (Number.isFinite(n)) { out[key] = n; break }
-        }
-      }
-    }
-  }
-
   return out
 }
 
-// ---------------- pipeline ----------------
-export async function recomputeAll(opts?: { debug?: boolean }) {
-  if (opts?.debug) process.env.DEBUG_AGG_LOG = '1'
-
-  // 1) trabalhos
-  const trabSnap = await getDocs(collection(db, 'trabalhos'))
-  const works: Work[] = trabSnap.docs.map(d => ({ id: d.id, ...(d.data() as any) }))
-
-  // 2) agrupar por rúbrica
-  const byRubric = new Map<string, { rubric: Rubric; works: Work[] }>()
-  for (const w of works) {
-    const r = resolveRubricIdFromWork(w)
-    if (!byRubric.has(r.id)) byRubric.set(r.id, { rubric: r, works: [] })
-    byRubric.get(r.id)!.works.push(w)
-  }
-
-  for (const [rubricId, group] of byRubric) {
-    dheader(`RÚBRICA ${rubricId} — ${group.rubric.label}`)
-    await recomputeGroup(group.rubric, group.works)
-  }
-
-  dlog('\nOK: recompute finalizado.')
+function divInto(target: MaybePerCriterion, criteria: CriterionId[], divisor: number): PerCriterion {
+  const out: any = {}
+  for (const c of criteria) out[c] = divisor ? safeNum(target[c]) / divisor : 0
+  return out as PerCriterion
 }
 
-async function recomputeGroup(rubric: Rubric, works: Work[]) {
-  if (!works.length) return
-  const k = rubric.criteria.length
+// ✅ correção: função genérica sem restringir T a number
+function mapPerCriterion<T>(criteria: CriterionId[], fn: (c: CriterionId)=>T): Record<CriterionId, T> {
+  const o: any = {}
+  for (const c of criteria) o[c] = fn(c)
+  return o
+}
 
-  // (A) médias por TRABALHO/critério (NaCi)
-  const NaCByWork = new Map<string, Record<CriterionId, number>>()
+// ------------------------ persistência ------------------------
 
-  // (B) base global por critério com TODAS as notas individuais (para MCi/σi)
-  const allScoresByCriterion: Record<CriterionId, number[]> =
-    Object.fromEntries(rubric.criteria.map(c => [c, []])) as any
+async function saveRubricStats(rubricId: RubricId, stats: {
+  count: Record<CriterionId, number>
+  sum:   Record<CriterionId, number>
+  sumsq: Record<CriterionId, number>
+  mean:  Record<CriterionId, number>
+  std:   Record<CriterionId, number>
+}) {
+  const headRef = firestore.doc(`rubricStats/${rubricId}`)
+  await headRef.set({ rubricId, updatedAt: Timestamp.fromDate(new Date()) }, { merge: true })
 
-  for (const w of works) {
-    const qEval = query(collection(db, 'avaliacoes'), where('trabalhoId', '==', w.id))
-    const snap = await getDocs(qEval)
-
-    const sum: Record<CriterionId, number> = Object.fromEntries(rubric.criteria.map(c => [c, 0])) as any
-    const cnt: Record<CriterionId, number> = Object.fromEntries(rubric.criteria.map(c => [c, 0])) as any
-
-    let evalCount = 0
-    for (const d of snap.docs) {
-      const e = d.data() as EvalDoc
-      const m = mapScoresFromEvaluation(e, k)
-
-      if (isDbg()) {
-        const seen = rubric.criteria.map(c => `${c}=${m[c]}`)
-        dlog(` • eval ${d.id} →`, seen.join(', '))
-      }
-
-      // acumula para NaCi (por trabalho)
-      for (const c of rubric.criteria) {
-        const v = Number(m[c] ?? 0)
-        if (Number.isFinite(v)) { sum[c] += v; cnt[c] += 1 }
-      }
-
-      // acumula notas individuais para base GLOBAL (MCi/σi)
-      for (const c of rubric.criteria) {
-        const v = Number(m[c] ?? 0)
-        if (Number.isFinite(v)) allScoresByCriterion[c].push(v)
-      }
-
-      evalCount++
-    }
-
-    const mean: Record<CriterionId, number> = {} as any
-    for (const c of rubric.criteria) mean[c] = cnt[c] ? sum[c] / cnt[c] : 0
-    NaCByWork.set(w.id, mean)
-
-    dlog(`Trabalho ${w.id} (${w.titulo || '—'}) — avaliações: ${evalCount}`)
-    dtable('NaCi (média por critério)', rubric.criteria.map(c => ({ criterio: c, NaCi: round(mean[c], 6) })))
-  }
-
-  // (C) MCi e σi sobre TODAS as notas individuais (não sobre NaCi)
-  const MCi: Record<CriterionId, number> = {} as any
-  const SDi: Record<CriterionId, number> = {} as any
-
-  for (const c of rubric.criteria) {
-    const arr = allScoresByCriterion[c] || []
-    const mean = arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0
-    const sd = stdPopulation(arr)
-    MCi[c] = mean
-    SDi[c] = sd
-  }
-
-  if (isDbg()) {
-    dtable('Base global (contagem por critério)', rubric.criteria.map(c => ({
-      criterio: c, n: (allScoresByCriterion[c] || []).length,
-    })))
-    dtable('MCi (média global por critério — todas as notas)', rubric.criteria.map(c => ({ criterio: c, MCi: round(MCi[c], 6) })))
-    dtable('σi (desvio padrão populacional — todas as notas)', rubric.criteria.map(c => ({ criterio: c, sigma: round(SDi[c], 11) })))
-  }
-
-  // (D) NCi e NF por trabalho
-  for (const w of works) {
-    const NaC = NaCByWork.get(w.id) || {}
-    const NCi: Record<CriterionId, number> = {} as any
-    const contrib: Record<CriterionId, number> = {} as any
-    let NF = 0
-
-    for (const c of rubric.criteria) {
-      const nac = NaC[c] ?? 0
-      const mc = MCi[c] ?? 0
-      const sd = SDi[c] ?? 0
-      const nci = ((nac - mc) / (sd || EPS)) + rubric.z
-      const part = nci * (rubric.weights[c] ?? 0)
-      NCi[c] = nci
-      contrib[c] = part
-      NF += part
-    }
-
-    dheader(`WORK ${w.id} — ${w.titulo || '—'}`)
-    dtable('Entradas (NaCi / MCi / σi / peso)', rubric.criteria.map(c => ({
-      criterio: c,
-      NaCi: round(NaC[c] ?? 0, 6),
-      MCi: round(MCi[c] ?? 0, 6),
-      sigma: round(SDi[c] ?? 0, 11),
-      peso: rubric.weights[c],
-    })))
-    dtable('NCi e contribuição (NCi * peso)', rubric.criteria.map(c => ({
-      criterio: c,
-      NCi: round(NCi[c], 6),
-      contrib: round(contrib[c], 6),
-    })))
-    dlog('NF =', round(NF, 6))
-
-    await setDoc(doc(db, 'workAggregates', w.id), {
-      workId: w.id,
-      rubricId: rubric.id,
-      meanByCriterion: NaC,   // NaCi por trabalho
-      meanGlobal: MCi,        // média global por critério (todas as notas)
-      stdGlobal: SDi,         // σ global por critério (todas as notas)
-      nci: NCi,
-      nf: NF,
-      updatedAt: new Date().toISOString(),
+  for (const c of Object.keys(stats.mean) as CriterionId[]) {
+    const ref = firestore.doc(`rubricStats/${rubricId}/criteria/${c.toLowerCase()}`)
+    await ref.set({
+      rubricId,
+      criterionId: c.toLowerCase(),
+      count: stats.count[c],
+      sum:   Number(stats.sum[c].toFixed(12)),
+      sumsq: Number(stats.sumsq[c].toFixed(12)),
+      mean:  Number(stats.mean[c].toFixed(12)),
+      std:   Number(stats.std[c].toFixed(12)),
+      updatedAt: Timestamp.fromDate(new Date()),
     }, { merge: true })
   }
 }
 
-// CLI
-if (process.argv.includes('--once')) {
-  recomputeAll({ debug: isDbg() })
-    .then(() => { if (isDbg()) console.log('OK') })
-    .catch((e) => { console.error(e); process.exit(1) })
+async function saveWorkAggregate(workId: string, data: {
+  rubricId: RubricId
+  meanByCriterion: Record<CriterionId, number>   // NaCi
+  meanGlobal: Record<CriterionId, number>        // MCi
+  sigma: Record<CriterionId, number>             // σi
+  nci: Record<CriterionId, number>               // NCi
+  final: number
+}) {
+  const ref = firestore.doc(`workAggregates/${workId}`)
+  await ref.set({
+    ...data,
+    updatedAt: Timestamp.fromDate(new Date()),
+  }, { merge: true })
+
+  await firestore.doc(`trabalhos/${workId}`).set({
+    finalScore: Number(data.final.toFixed(4)),
+    rubricId: data.rubricId,
+    aggregatesUpdatedAt: Timestamp.fromDate(new Date())
+  }, { merge: true })
+}
+
+// ------------------------ processo por rúbrica ------------------------
+
+async function processGroup(rubricId: RubricId, works: WorkDoc[]) {
+  if (!works.length) return
+  const criteria = criteriaFor(rubricId)
+  const weights = weightsFor(rubricId)
+
+  DEBUG && console.log(`\n================ RÚBRICA ${rubricId} — ${rubricTitle(rubricId)} ================`)
+
+  // 1) NaCi por trabalho
+  const NaCi_by_work: Record<string, PerCriterion> = {}
+  for (const w of works) {
+    const evals = await listEvaluationsByWork(w.id)
+    const sum: MaybePerCriterion = {}
+    let count = 0
+    for (const ev of evals) {
+      const pc = fromEvaluationToPerCriterion(ev, criteria)
+      if (Object.keys(pc).length) {
+        addInto(sum, criteria, pc)
+        count++
+      }
+    }
+    NaCi_by_work[w.id] = divInto(sum, criteria, count || 1)
+
+    DEBUG && console.table([
+      { label: `Trabalho ${w.id} (${w.titulo || ''}) — avaliações`, value: evals.length }
+    ])
+    DEBUG && console.table(
+      criteria.map(c => ({ criterio: c, NaCi: Number(NaCi_by_work[w.id][c].toFixed(6)) }))
+    )
+  }
+
+  // 2) MCi e σi globais
+  const NaCisArray: Record<CriterionId, number[]> = mapPerCriterion(criteria, () => [])
+  for (const w of works) {
+    const nac = NaCi_by_work[w.id]
+    for (const c of criteria) NaCisArray[c].push(safeNum(nac[c]))
+  }
+
+  const MCi: Record<CriterionId, number> = mapPerCriterion(criteria, c => {
+    const arr = NaCisArray[c]; return arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : 0
+  })
+  const sigma: Record<CriterionId, number> = mapPerCriterion(criteria, c => popStd(NaCisArray[c]))
+
+  DEBUG && console.log('\nMCi (média global por critério no grupo)')
+  DEBUG && console.table(criteria.map(c => ({ criterio: c, MCi: Number(MCi[c].toFixed(6)) })))
+  DEBUG && console.log('\nσi (desvio padrão global por critério no grupo)')
+  DEBUG && console.table(criteria.map(c => ({ criterio: c, sigma: Number(sigma[c].toFixed(6)) })))
+
+  // 3) NCi e NF por trabalho
+  for (const w of works) {
+    const nac = NaCi_by_work[w.id]
+    const nci: Record<CriterionId, number> = mapPerCriterion(criteria, c => {
+      const sd = sigma[c]
+      const base = sd > 0 ? (nac[c] - MCi[c]) / sd : 0
+      return base + Z
+    })
+    const contribs = criteria.map(c => ({ c, NCi: nci[c], contrib: nci[c] * (weights[c] || 0) }))
+    const finalScore = contribs.reduce((a, it) => a + it.contrib, 0)
+
+    if (DEBUG) {
+      console.log(`\n================ WORK ${w.id} — ${w.titulo || ''} ================`)
+      console.log('\nEntradas (NaCi / MCi / σi / peso)')
+      console.table(criteria.map(c => ({
+        criterio: c,
+        NaCi: Number(nac[c].toFixed(6)),
+        MCi: Number(MCi[c].toFixed(6)),
+        sigma: Number(sigma[c].toFixed(6)),
+        peso: weights[c] || 0
+      })))
+      console.log('\nNCi e contribuição (NCi * peso)')
+      console.table(contribs.map(it => ({
+        criterio: it.c,
+        NCi: Number(it.NCi.toFixed(6)),
+        contrib: Number(it.contrib.toFixed(6))
+      })))
+      console.log(`NF = ${Number(finalScore.toFixed(6))}\n`)
+    }
+
+    await saveWorkAggregate(w.id, {
+      rubricId,
+      meanByCriterion: nac,
+      meanGlobal: MCi,
+      sigma,
+      nci,
+      final: finalScore
+    })
+  }
+
+  // 4) Estatísticas globais da rúbrica
+  const count: Record<CriterionId, number> = mapPerCriterion(criteria, c => NaCisArray[c].length)
+  const sum:   Record<CriterionId, number> = mapPerCriterion(criteria, c => NaCisArray[c].reduce((a,b)=>a+b,0))
+  const sumsq: Record<CriterionId, number> = mapPerCriterion(criteria, c => NaCisArray[c].reduce((a,b)=>a+b*b,0))
+  await saveRubricStats(rubricId, { count, sum, sumsq, mean: MCi, std: sigma })
+}
+
+// ------------------------ orquestração ------------------------
+
+export async function recomputeAll(debug = false) {
+  const allWorks = await listWorks()
+  if (!allWorks.length) {
+    if (debug || DEBUG) console.log('[aggregator] Nenhum trabalho encontrado.')
+    return
+  }
+
+  const groups: Record<RubricId, WorkDoc[]> = {
+    'iftech': [], 'feira': [], 'comoral': [],
+    'banner-ensino': [], 'banner-extensao': [], 'banner-pesquisa': []
+  }
+  for (const w of allWorks) {
+    const rid = resolveRubricId({ categoria: w.categoria, subcategoria: w.subcategoria })
+    groups[rid].push(w)
+  }
+
+  for (const [rid, list] of Object.entries(groups) as [RubricId, WorkDoc[]][]) {
+    if (!list.length) continue
+    await processGroup(rid, list)
+  }
+
+  if (debug || DEBUG) console.log('OK: recompute finalizado.')
+}
+
+// ------------------------ CLI helper ------------------------
+
+const isDirectRun = (() => {
+  try {
+    // quando executado diretamente: `node dist/worker.js` ou `tsx src/worker.ts`
+    // process.argv[1] aponta para o arquivo “main”
+    const thisFile = fileURLToPath(import.meta.url);
+    return process.argv[1] && (thisFile === process.argv[1]);
+  } catch {
+    return false;
+  }
+})();
+
+if (isDirectRun) {
+  const runOnce = process.argv.includes('--once') || process.argv.includes('--run');
+  const debug = process.argv.includes('--debug') || process.env.DEBUG_AGG_LOG === '1';
+  recomputeAll(debug).then(() => {
+    if (runOnce) process.exit(0);
+  }).catch(err => {
+    console.error('[aggregator] error:', err);
+    process.exit(1);
+  });
 }

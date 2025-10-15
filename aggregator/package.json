@@ -5,22 +5,26 @@
   "type": "module",
   "main": "dist/server.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js",
-    "dev": "tsx src/server.ts",
-    "recompute": "tsx src/worker.ts --once",
-    "recompute:debug": "cross-env DEBUG_AGG_LOG=1 tsx src/worker.ts --once"
+    "dev": "cross-env NODE_ENV=development tsx src/server.ts",
+    "dev:once": "cross-env NODE_ENV=development tsx src/worker.ts --once --debug",
+    "start": "cross-env NODE_ENV=production tsx src/server.ts",
+    "recompute": "cross-env NODE_ENV=production tsx src/worker.ts --once",
+    "recompute:debug": "cross-env NODE_ENV=production DEBUG_AGG_LOG=1 tsx src/worker.ts --once --debug"
   },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
     "express": "^4.21.2",
     "firebase": "^12.4.0",
-    "firebase-admin": "^12.5.0"
+    "firebase-admin": "^12.5.0",
+    "helmet": "^8.1.0",
+    "morgan": "^1.10.1"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.3",
+    "@types/helmet": "^0.0.48",
+    "@types/morgan": "^1.9.10",
     "@types/node": "^24.7.2",
     "cross-env": "^10.1.0",
     "tsx": "^4.20.6",
