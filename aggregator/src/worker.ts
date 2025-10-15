@@ -296,4 +296,4 @@ if (isDirectRun) {
     console.error('[aggregator] error:', err);
     process.exit(1);
   });
-}
+} 
